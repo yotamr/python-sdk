@@ -245,6 +245,7 @@ class PythonSDK:
         linenum = frame.f_lineno
         event_wrapper['calling_file'] = str(filename)
         event_wrapper['calling_line'] = str(linenum)
+        event_wrapper['input_type'] = 'Python SDK'
         event_wrapper['input_label'] = self.input_label
 
         # Try to set event type. If it throws, put the input label
@@ -460,8 +461,10 @@ class _Sender:
 
     def _enqueue_batches(self, batches):
         """
-
-        :param batches:
+        Enqueues several batches, putting all events in the Sender buffer. Only
+        when a prior batch failed and needs to be resent along with the current
+        batch
+        :param batches: a list of batches, each of which is a list of events
         """
         for batch in batches:
             for event in batch:
@@ -469,7 +472,7 @@ class _Sender:
 
     def _send_batch(self, batch):
         """
-
+        Sends a batch to the destination server via the socket
         :param batch:
         """
         batch_string = "\n".join(batch)
