@@ -212,7 +212,7 @@ class PythonSDK:
                              (type(event), event))
             self._notify(SEND_FAILED, error_message)
 
-    def report_many(self, event_list, metadata):
+    def report_many(self, event_list, metadata=None):
         """
         Reports all the given events to Alooma by formatting them properly and
         placing them in the buffer to be sent by the Sender instance
@@ -295,11 +295,15 @@ class PythonSDK:
 
     @property
     def is_connected(self):
+        if not hasattr(self, '_sender'):
+            return False
         return self._sender.is_connected
 
     @property
-    def sender(self):
-        return self._sender
+    def servers(self):
+        if not hasattr(self, '_sender'):
+            return []
+        return self._sender.servers
 
 
 class _Sender:
@@ -557,6 +561,10 @@ class _Sender:
         """
         event = self._event_queue.get(block)
         return event
+
+    @property
+    def servers(self):
+        return self._hosts
 
     @property
     def event_buffer(self):
