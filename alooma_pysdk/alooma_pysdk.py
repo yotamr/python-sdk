@@ -514,8 +514,7 @@ class _Sender:
                 self._enqueue_batches([batch, former_batch])
                 if isinstance(e.args, tuple):
                     if e[0] == errno.EPIPE:
-                        error_message = ("The connection to the server"
-                                         " was lost")
+                        error_message = "The connection to the server was lost"
                         self._notify(DISCONNECTED, error_message)
                     else:
                         self._notify(SEND_FAILED, e)
