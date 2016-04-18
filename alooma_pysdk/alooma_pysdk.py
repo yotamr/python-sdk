@@ -32,7 +32,7 @@ BUFFER_FULL = 48  # Buffer Full
 BUFFER_FREED = 49  # Buffer Freed
 CONFIG_FAILED = 50  # Init failure
 
-_logger = logging.getLogger('alooma.python_sdk')
+_logger = logging.getLogger(__name__)
 _sender_instances_lock = threading.Lock()
 _sender_instances = {}
 
@@ -88,15 +88,18 @@ class PythonSDK:
        function documentation).
     """
 
-    def __init__(self, servers, port=5001, input_label='Python SDK',
-                 event_type=None, ssl_ca='ca_certs', callback=None,
-                 buffer_size=100000, blocking=True, batch_mode=True,
-                 batch_size=4096):
+    def __init__(self, token, servers='inputs.alooma.io', port=5001,
+                 input_label='Python SDK', event_type=None, ssl_ca='ca_certs',
+                 callback=None, buffer_size=100000, blocking=True,
+                 batch_mode=True, batch_size=4096):
         """
         Initializes the Alooma Python SDK, creating a connection to
         the Alooma server
-        :param servers:     A string representing your Alooma server DNS or IP
-                            address, or a list of such strings
+        :param token:       Your unique Alooma token for this input. If you
+                            don't have one, please contact support@alooma.com
+        :param servers:     (Optional) A string representing your Alooma server
+                            DNS or IP address, or a list of such strings.
+                            Usually unnecessary.
         :param port:        (Optional) The destination port (default is 5001)
         :param ssl_ca:      (Optional) The path to a CA file validating the
                             server certificate. If specified, uses SSL for the
@@ -131,6 +134,8 @@ class PythonSDK:
 
         # Check inputs.
         errors = []
+        if token is not None and not isinstance(token, basestring):
+            errors.append("Invalid token. Must be a string")
         if ssl_ca and (not isinstance(ssl_ca, basestring) or not os.access(
                 ssl_ca, os.R_OK | os.F_OK)):
             errors.append("Invalid CA file: %s" % ssl_ca)
@@ -178,6 +183,7 @@ class PythonSDK:
                 _sender_instances[servers] = self._sender
 
         self.input_label = input_label
+        self.token = token
 
         if callable(event_type):
             # Use the given callable
@@ -249,6 +255,7 @@ class PythonSDK:
         event_wrapper['calling_line'] = str(linenum)
         event_wrapper['input_type'] = 'Python SDK'
         event_wrapper['input_label'] = self.input_label
+        event_wrapper['token'] = self.token
 
         # Try to set event type. If it throws, put the input label
         try:
