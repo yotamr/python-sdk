@@ -43,8 +43,8 @@ def terminate():
     :return:
     """
     with _sender_instances_lock:
-        for sender_key in _sender_instances.keys():
-            _sender_instances[sender_key].close()
+        for sender_key, sender in _sender_instances.iteritems():
+            sender.close()
             del _sender_instances[sender_key]
 
 
@@ -166,7 +166,7 @@ class PythonSDK:
             self._notify(CONFIG_FAILED, error_message)
             raise ValueError(error_message)
 
-        # Instantiate a Sender to get events from the queue and send them.
+        # Get a Sender to get events from the queue and send them.
         # Sender is a Singleton
         with _sender_instances_lock:
             existing_sender = _sender_instances.get(servers, None)
@@ -194,7 +194,7 @@ class PythonSDK:
         the buffer to be sent by the Sender instance
         :param event:    A dict / string representing an event
         :param metadata: A dict with metadata to be attached to the event
-        :return:         A dict representing a properly-formatted event
+        :return:         True if the event was successfully enqueued, else False
         """
         # Send the event to the queue if it is a dict or a string.
         if isinstance(event, (dict, basestring)):
@@ -205,12 +205,14 @@ class PythonSDK:
                     time.sleep(0.5)
 
             self._sender.enqueue_event(formatted_event)
+            return True
 
         else:  # Event is not a dict nor a string. Deny it.
             error_message = ('Received an invalid event of type "%s", the event'
                              ' was discarded. Original event  = "%s"' %
                              (type(event), event))
             self._notify(SEND_FAILED, error_message)
+            return False
 
     def report_many(self, event_list, metadata=None):
         """
