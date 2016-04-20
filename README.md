@@ -29,7 +29,7 @@ When initialized, the PySDK instantiates a Sender. The Sender starts a separate 
 3. Initialize a PySDK instance by adding the following line in your Python file:
 
     ``` Python
-sdk = alooma_pysdk.PythonSDK(servers)
+sdk = alooma_pysdk.PythonSDK(servers='<your-alooma-server>')
     ```
   - `token` - A arbitrary unique identifier for this input.
   - `servers` - A list of the IPs / Hostnames of your dedicated Alooma servers, supplied by Alooma. To get a server definition, please contact [support@alooma.com](mailto:support@alooma.com)
