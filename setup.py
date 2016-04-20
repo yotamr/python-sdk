@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 from pip.req import parse_requirements
+from distutils.core import setup
 
 install_reqs = parse_requirements("requirements.txt", session=False)
 
 reqs = [str(ir.req) for ir in install_reqs]
-
-from distutils.core import setup
 
 setup(
   name = 'alooma_pysdk',
@@ -15,6 +14,7 @@ setup(
   url = 'https://github.com/Aloomaio/python-sdk',
   author = 'Yuval Barth',
   author_email = 'yuval@alooma.com',
-  keywords = ['python', 'sdk', 'alooma']
+  keywords = ['python', 'sdk', 'alooma'],
+  install_requires = ['six==1.10.0']
 )
 

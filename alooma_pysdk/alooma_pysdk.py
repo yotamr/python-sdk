@@ -1,7 +1,8 @@
 # -*- coding: utf8 -*-
 # This module contains the Alooma Python SDK, used to report events to the
 # Alooma server
-import Queue
+import six
+from six.moves import queue
 import datetime
 import decimal
 import errno
@@ -134,9 +135,9 @@ class PythonSDK:
 
         # Check inputs.
         errors = []
-        if token is not None and not isinstance(token, basestring):
+        if token is not None and not isinstance(token, six.string_types):
             errors.append("Invalid token. Must be a string")
-        if ssl_ca and (not isinstance(ssl_ca, basestring) or not os.access(
+        if ssl_ca and (not isinstance(ssl_ca, six.string_types) or not os.access(
                 ssl_ca, os.R_OK | os.F_OK)):
             errors.append("Invalid CA file: %s" % ssl_ca)
         if not isinstance(port, int):
@@ -146,13 +147,13 @@ class PythonSDK:
         if not callable(self._callback):
             errors.append("Invalid callback: %s is not callable" %
                           str(type(self._callback)))
-        if not isinstance(servers, (str, unicode)) and not isinstance(servers,
+        if not isinstance(servers, six.string_types) and not isinstance(servers,
                                                                       list):
             errors.append('Invalid server list: must be a list of servers or a '
                           'str or unicode type representing one server')
-        if not isinstance(input_label, basestring):
+        if not isinstance(input_label, six.string_types):
             errors.append('Invalid input_label. Must be a string')
-        if event_type and not isinstance(event_type, basestring) \
+        if event_type and not isinstance(event_type, six.string_types) \
                 and not callable(event_type):
             errors.append('Invalid event_type. Must be either a string or a '
                           'callable. Instead given: %s' % type(event_type))
@@ -203,7 +204,7 @@ class PythonSDK:
         :return:         True if the event was successfully enqueued, else False
         """
         # Send the event to the queue if it is a dict or a string.
-        if isinstance(event, (dict, basestring)):
+        if isinstance(event, (dict, six.string_types)):
             formatted_event = self._format_event(event, metadata)
             if self.blocking:
                 while (self._sender.buffer_max_size * 0.9) < \
@@ -326,11 +327,11 @@ class _Sender:
                  batch_size):
 
         # This is a concurrent FIFO queue
-        self._event_queue = Queue.Queue(buffer_size)
+        self._event_queue = queue.Queue(buffer_size)
 
         # Set connection vars
         self._is_connected = False
-        if isinstance(hosts, str) or isinstance(hosts, unicode):
+        if isinstance(hosts, six.string_types):
             hosts = hosts.strip().split(',')
         self._hosts = hosts
         self._tcp_host = None
@@ -456,7 +457,7 @@ class _Sender:
                 former_event = event
                 event = self.__dequeue_event()
                 self._sock.send(event)
-            except socket.error, e:  # Socket DCed or is faulted
+            except socket.error as e:  # Socket DCed or is faulted
                 self.enqueue_event(former_event)
                 self.enqueue_event(event)
                 if isinstance(e.args, tuple):
@@ -467,7 +468,7 @@ class _Sender:
                 else:
                     self._notify(SEND_FAILED, e)
                 self._is_connected = False
-            except Exception, ex:  # Trap non-socket-error Exceptions.
+            except Exception as ex:  # Trap non-socket-error Exceptions.
                 self.enqueue_event(former_event)
                 self.enqueue_event(event)
                 self._notify(SEND_FAILED, ex)
@@ -519,7 +520,7 @@ class _Sender:
                     batch_size = 0
                 else:
                     time.sleep(1)
-            except socket.error, e:  # Socket DCed or is faulted
+            except socket.error as e:  # Socket DCed or is faulted
                 self._enqueue_batches([batch, former_batch])
                 if isinstance(e.args, tuple):
                     if e[0] == errno.EPIPE:
@@ -528,7 +529,7 @@ class _Sender:
                     else:
                         self._notify(SEND_FAILED, e)
                 self._is_connected = False
-            except Exception, ex:  # Trap non-socket-error Exceptions.
+            except Exception as ex:  # Trap non-socket-error Exceptions.
                 self._enqueue_batches([batch, former_batch])
                 self._notify(SEND_FAILED, ex)
 
