@@ -69,7 +69,7 @@ class AloomaEncoder(json.JSONEncoder):
 
 
 _json_enc = AloomaEncoder()
-
+_default_ca = os.path.dirname(os.path.realpath(__file__)) + '/alooma_ca'
 
 class PythonSDK:
     """
@@ -89,7 +89,7 @@ class PythonSDK:
     """
 
     def __init__(self, token, servers='inputs.alooma.io', port=5001,
-                 input_label='Python SDK', event_type=None, ssl_ca='ca_certs',
+                 input_label='Python SDK', event_type=None, ssl_ca=_default_ca,
                  callback=None, buffer_size=100000, blocking=True,
                  batch_mode=True, batch_size=4096):
         """
@@ -102,8 +102,9 @@ class PythonSDK:
                             Usually unnecessary.
         :param port:        (Optional) The destination port (default is 5001)
         :param ssl_ca:      (Optional) The path to a CA file validating the
-                            server certificate. If specified, uses SSL for the
-                            connection and verifies the server
+                            server certificate. Default is a provided CA file
+                            for Alooma. If None is passed, a plaintext 
+                            connection will be created.
         :param callback:    (Optional) a custom callback function to be called
                             whenever a logged event occurs
         :param buffer_size: Optionally specify the buffer size to store before
