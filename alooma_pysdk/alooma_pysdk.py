@@ -14,6 +14,7 @@ import socket
 import ssl
 import threading
 import time
+import uuid
 
 #####################################################
 # We should refrain for adding more dependencies to #
@@ -257,6 +258,7 @@ class PythonSDK:
         event_wrapper['input_type'] = 'Python SDK'
         event_wrapper['input_label'] = self.input_label
         event_wrapper['token'] = self.token
+        event_wrapper['@uuid'] = str(uuid.uuid4())
 
         # Try to set event type. If it throws, put the input label
         try:
