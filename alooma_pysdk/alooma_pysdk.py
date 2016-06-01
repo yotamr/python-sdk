@@ -24,7 +24,7 @@ import uuid
 #####################################################
 
 # Explicit enum for logging message types
-LOG_SSL_WRAP = LOG_CONNECTING = logging.DEBUG
+LOG_SSL_WRAP = LOG_CONNECTING = LOG_EXIT_FLUSH = logging.DEBUG
 LOG_CONNECTED = LOG_BUFFER_FREED = logging.INFO
 LOG_DISCONNECTED = LOG_FAILED_SEND = LOG_BUFFER_FULL = logging.ERROR
 LOG_INIT_FAILED = logging.CRITICAL
@@ -54,8 +54,8 @@ _logger = __get_logger()
 
 def terminate():
     """
-    Stops all the active Senders by closing their sockets
-    :return:
+    Stops all the active Senders by flushing the buffers and closing the
+    underlying sockets
     """
     with _sender_instances_lock:
         for sender_key, sender in _sender_instances.iteritems():
@@ -219,6 +219,12 @@ class PythonSDK:
         :param metadata: A dict with metadata to be attached to the event
         :return:         True if the event was successfully enqueued, else False
         """
+        # Don't allow reporting if the underlying sender is terminated
+        if self._sender.is_terminated:
+            self._notify(LOG_FAILED_SEND,
+                         'Can\'t report events after termination')
+            return False
+
         # Send the event to the queue if it is a dict or a string.
         if isinstance(event, (dict, basestring)):
             formatted_event = self._format_event(event, metadata)
@@ -516,13 +522,13 @@ class _Sender:
     def _start_send_cycle_batch(self):
         """
         Runs on a pysdk_sender_worker_thread and handles sending
-        events to the LogStash server. Events are sent every
+        events to the Alooma server. Events are sent every
         <self._batch_interval> seconds or whenever batch size reaches
         <self._batch_size>
         """
         batch = []
         batch_size = 0
-        while not self.is_terminated:
+        while not (self.is_terminated and self._event_queue.empty()):
             while not self._is_connected:
                 self._connect()
                 if self._is_connected:
@@ -566,7 +572,7 @@ class _Sender:
             if self._notified_buffer_full:
                 self._notified_buffer_full = False
                 self._notify(LOG_BUFFER_FREED,
-                             "The buffer is not full any more, events will"
+                             "The buffer is not full anymore, events will"
                              " be queued for reporting")
             self._event_queue.put(event)
         else:
@@ -581,11 +587,13 @@ class _Sender:
         Closes the socket used to send data to Alooma
         """
         self.is_terminated = True
+        flushed = self.__flush()
         if self._sock:
             self._sock.close()
             self._is_connected = False
         self._notify(LOG_DISCONNECTED,
-                     'Terminated the connection to %s' % self._hosts)
+                     'Terminated the connection to %s after flushing %d '
+                     'events' % (self._hosts, flushed))
 
     def __dequeue_event(self, block=True):
         """
@@ -594,6 +602,12 @@ class _Sender:
         """
         event = self._event_queue.get(block)
         return event
+
+    def __flush(self):
+        q_size = self._event_queue.qsize()
+        while not self._event_queue.empty():
+            time.sleep(0.5)
+        return q_size
 
     @property
     def servers(self):
