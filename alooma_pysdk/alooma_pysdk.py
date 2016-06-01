@@ -104,7 +104,7 @@ class PythonSDK:
        function documentation).
     """
 
-    def __init__(self, token, servers='inputs.alooma.io', port=5001,
+    def __init__(self, token, servers='inputs.alooma.com', port=5001,
                  input_label='Python SDK', event_type=None, ssl_ca=_default_ca,
                  callback=None, buffer_size=100000, blocking=True,
                  batch_mode=True, batch_size=4096):
