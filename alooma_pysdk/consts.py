@@ -10,6 +10,9 @@ BUFFER_FULL = 48  # Buffer Full
 BUFFER_FREED = 49  # Buffer Freed
 CONFIG_FAILED = 50  # Init failure
 
+# Sleep time consts
+EMPTY_BATCH_SLEEP_TIME = 1  # Second
+
 # Defaults
 DEFAULT_BATCH_INTERVAL = 5  # Seconds
 DEFAULT_BATCH_SIZE = 4096  # Bytes

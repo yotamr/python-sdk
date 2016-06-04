@@ -17,6 +17,7 @@ import time
 import uuid
 
 import consts
+import pysdk_exceptions as exceptions
 
 #####################################################
 # We should refrain for adding more dependencies to #
@@ -321,7 +322,7 @@ class _Sender:
         self._event_queue = Queue.Queue(buffer_size)
 
         # Set connection vars
-        self._is_connected = False
+        self._is_connected = threading.Event()
         if isinstance(hosts, str) or isinstance(hosts, unicode):
             hosts = hosts.strip().split(',')
         self._hosts = hosts
@@ -335,6 +336,7 @@ class _Sender:
         self._notify = notify
         self._is_terminated = threading.Event()
         self._batch_max_size = batch_size
+        self._batch_max_interval = batch_interval
 
         # Start the sender thread
         self._start_sender_thread()
@@ -418,47 +420,15 @@ class _Sender:
             else:  # Successfully established a connection.
                 message = "Established connection to the server"
                 self._notify(consts.CONNECTED, message)
-                self._is_connected = True
+                self._is_connected.set()
                 return True  # The connection was successful
 
     def _start_sender_thread(self):
         """Start the sender thread to initiate messaging."""
-        send_cycle_routine = self._start_send_cycle_batch
-        self._sender_thread = threading.Thread(None,
-                                               send_cycle_routine)
+        self._sender_thread = threading.Thread(None, self._sender_main)
         self._sender_thread.daemon = True
-        self._sender_thread.setName("pysdk_sender_worker_thread")
+        self._sender_thread.setName("pysdk_sender_thread")
         self._sender_thread.start()
-
-    def _start_send_cycle(self):
-        """
-        Runs on a pysdk_sender_worker_thread and handles sending
-        events to the Alooma server.
-        """
-        event = former_event = None
-        while not self.is_terminated:
-            while not self._is_connected:
-                self._connect()
-                time.sleep(1)
-            try:
-                former_event = event
-                event = self.__dequeue_event()
-                self._sock.send(event)
-            except socket.error, e:  # Socket DCed or is faulted
-                self.enqueue_event(former_event)
-                self.enqueue_event(event)
-                if isinstance(e.args, tuple):
-                    if e[0] == errno.EPIPE:
-                        error_message = ("The connection to the server"
-                                         " was lost")
-                        self._notify(consts.DISCONNECTED, error_message)
-                else:
-                    self._notify(consts.SEND_FAILED, e)
-                self._is_connected = False
-            except Exception, ex:  # Trap non-socket-error Exceptions.
-                self.enqueue_event(former_event)
-                self.enqueue_event(event)
-                self._notify(consts.SEND_FAILED, ex)
 
     def _enqueue_batches(self, batches):
         """
@@ -471,6 +441,28 @@ class _Sender:
             for event in batch:
                 self.enqueue_event(event)
 
+    def _is_batch_time_over(self, last_batch_time):
+        batch_time = (datetime.datetime.utcnow() - last_batch_time)
+        return batch_time.total_seconds() > self._batch_max_interval
+
+    def _is_batch_full(self, batch):
+        return len(batch) > self._batch_max_size
+
+    def _get_batch(self, last_batch_time):
+        batch = []
+        try:
+            while not self._is_batch_time_over(last_batch_time) \
+                    and not self._is_batch_full(batch):
+                batch.append(self._event_queue.get_nowait())
+
+        except Queue.Empty:  # No more events to fetch
+            pass
+
+        if batch:
+            return batch
+        else:
+            raise exceptions.EmptyBatch
+
     def _send_batch(self, batch):
         """
         Sends a batch to the destination server via the socket
@@ -479,46 +471,45 @@ class _Sender:
         batch_string = "\n".join(batch)
         self._sock.send(batch_string)
 
-    def _start_send_cycle_batch(self):
+    def _sender_main(self):
         """
-        Runs on a pysdk_sender_worker_thread and handles sending
-        events to the LogStash server. Events are sent every
-        <self._batch_interval> seconds or whenever batch size reaches
-        <self._batch_size>
+        Runs on a pysdk_sender_thread and handles sending events to the Alooma
+        server. Events are sent every <self._batch_interval> seconds or whenever
+        batch size reaches <self._batch_size>
         """
-        batch = []
-        batch_size = 0
-        while not (self.is_terminated and self._event_queue.empty()):
-            while not self._is_connected:
-                self._connect()
-                if self._is_connected:
-                    break
-                time.sleep(1)
+        last_batch_time = datetime.datetime.utcnow()
+        former_batch = batch = None
+
+        while not (self._is_terminated.isSet() and self._event_queue.empty()):
             try:
-                while batch_size < self._batch_max_size and not \
-                        self._event_queue.empty():
-                    event = self.__dequeue_event(False)
-                    batch.append(event)
-                    batch_size += len(event)
-                if batch:
-                    self._send_batch(batch)
-                    former_batch = batch[:]
-                    batch = []
-                    batch_size = 0
+                if not self._is_connected.isSet():
+                    self._connect()
+
+                batch = self._get_batch(last_batch_time)
+                self._send_batch(batch)
+                former_batch = batch
+
+            except exceptions.EmptyBatch:  # No events in queue, go to sleep
+                time.sleep(consts.EMPTY_BATCH_SLEEP_TIME)
+
+            except Exception as ex:
+                if isinstance(ex, socket.error):
+                    print ex, ex.errno, ex.strerror
+                    if isinstance(ex.args, tuple):
+                        if ex[0] == errno.EPIPE:
+                            error_message = \
+                                'The connection to the server was lost'
+                            self._notify(consts.DISCONNECTED, error_message)
+                    self._is_connected.clear()
                 else:
-                    time.sleep(1)
-            except socket.error, e:  # Socket DCed or is faulted
-                self._enqueue_batches([batch, former_batch])
-                if isinstance(e.args, tuple):
-                    if e[0] == errno.EPIPE:
-                        error_message = "The connection to the server was lost"
-                        self._notify(consts.DISCONNECTED, error_message)
-                    else:
-                        self._notify(consts.SEND_FAILED, e)
-                self._is_connected = False
-            except Exception, ex:  # Trap non-socket-error Exceptions.
-                self._enqueue_batches([batch, former_batch])
-                self._notify(consts.SEND_FAILED, ex)
+                    self._notify(consts.SEND_FAILED, str(ex))
+
+                if batch:  # Error occurred after dequeuing a batch
+                    self._enqueue_batches(
+                            *[b for b in [former_batch, batch] if b])
+
+            finally:  # Advance last batch time
+                last_batch_time = datetime.datetime.utcnow()
 
     def enqueue_event(self, event):
         """
@@ -576,7 +567,7 @@ class _Sender:
 
     @property
     def is_connected(self):
-        return self._is_connected
+        return self._is_connected.isSet()
 
     @property
     def is_terminated(self):
