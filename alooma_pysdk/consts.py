@@ -1,17 +1,15 @@
+import logging
 import os
 
 # Explicit enum for logging message types
-SSL_WRAP = 10  # Wrapping socket in SSL
-CONNECTING = 19  # Connection attempts to the LogStash server
-CONNECTED = 20  # Successful connection
-DISCONNECTED = 30  # Disconnections
-SEND_FAILED = 40  # Message sending failure
-BUFFER_FULL = 48  # Buffer Full
-BUFFER_FREED = 49  # Buffer Freed
-CONFIG_FAILED = 50  # Init failure
+LOG_SSL_WRAP = LOG_CONNECTING = LOG_EXIT_FLUSH = logging.DEBUG
+LOG_TERMINATED = LOG_CONNECTED = LOG_BUFFER_FREED = logging.INFO
+LOG_DISCONNECTED = LOG_FAILED_SEND = LOG_BUFFER_FULL = logging.ERROR
+LOG_INIT_FAILED = logging.CRITICAL
 
 # Sleep time consts
 EMPTY_BATCH_SLEEP_TIME = 1  # Second
+
 
 # Defaults
 DEFAULT_BATCH_INTERVAL = 5  # Seconds
@@ -20,7 +18,7 @@ DEFAULT_ALOOMA_ENDPOINT = 'inputs.alooma.com'
 DEFAULT_ALOOMA_PORT = 5001
 DEFAULT_CA = os.path.dirname(os.path.realpath(__file__)) + '/alooma_ca'
 DEFAULT_BUFFER_SIZE = 100000  # Events
-DEFAULT_INPUT_LABEL = DEFAULT_INPUT_TYPE = 'Python SDK'
+DEFAULT_INPUT_LABEL = 'Python SDK'
 
 # Wrapper fieldname consts
 WRAPPER_CALLING_FILE = 'calling_file'

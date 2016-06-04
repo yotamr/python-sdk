@@ -15,9 +15,9 @@ import ssl
 import threading
 import time
 import uuid
-
 import consts
 import pysdk_exceptions as exceptions
+
 
 #####################################################
 # We should refrain for adding more dependencies to #
@@ -26,18 +26,37 @@ import pysdk_exceptions as exceptions
 # which aren't Python built-ins.                    #
 #####################################################
 
-_logger = logging.getLogger(__name__)
+
+def __get_logger():
+    """
+    If the logger wasn't configured by the calling script, configures the
+    default logger - logs all messages to STDOUT and doesn't propagate to root
+    :return: The 'alooma_pysdk' logger from the built-in library `logging`
+    """
+    logger = logging.getLogger(__name__)
+    if logger.level == logging.NOTSET:
+        logger.addHandler(logging.StreamHandler())
+        logger.handlers[0].level = logger.level = logging.DEBUG
+        logger.handlers[0].formatter = logging.Formatter(
+                '%(asctime)s [%(levelname)s] {}: %(message)s'.format(__name__),
+                '%Y-%m-%dT%H:%M:%S')
+        logger.propagate = 0
+        logger.warn('Using the default logger configuration')
+    return logger
+
+
+_logger = __get_logger()
 
 
 def terminate():
     """
-    Stops all the active Senders by closing their sockets
-    :return:
+    Stops all the active Senders by flushing the buffers and closing the
+    underlying sockets
     """
     with _sender_instances_lock:
         for sender_key, sender in _sender_instances.iteritems():
             sender.close()
-            del _sender_instances[sender_key]
+        _sender_instances.clear()
 
 
 # Declare and instantiate an AloomaEncoder
@@ -72,8 +91,7 @@ class PythonSDK:
 
     There are two ways to get logs and respond to events in this SDK:
     1. The 'alooma.python_sdk' logger - adding this logger to your
-       `logging.conf` file allows to configure it with whichever settings the
-       user desires.
+       `logging.conf` file allows you to configure it however you wish.
     2. The `callback` parameter given to the `init` function - the callback
        function is called whenever a log-worthy event occurs, and is passed the
        event code and the proper message (see more details in the `callback`
@@ -157,6 +175,9 @@ class PythonSDK:
                           'callable. Instead given: %s' % type(event_type))
         if not isinstance(batch_size, int):
             errors.append("Invalid batch size, must be an int (in bytes)")
+        if not isinstance(batch_interval, (int, float)):
+            errors.append("Invalid batch interval, must be an int or a float"
+                          "(in seconds)")
         if not isinstance(blocking, bool):
             errors.append('Invalid blocking parameter, must be a boolean')
         else:
@@ -164,11 +185,11 @@ class PythonSDK:
         if errors:
             errors.append('The PySDK will now terminate.')
             error_message = "\n".join(errors)
-            self._notify(consts.CONFIG_FAILED, error_message)
+            self._notify(consts.LOG_INIT_FAILED, error_message)
             raise ValueError(error_message)
 
         # Get a Sender to get events from the queue and send them.
-        # Sender is a Singleton
+        # Sender is a Singleton per parameter group
         sender_params = (servers, port, buffer_size, ssl_ca,
                          batch_interval, batch_size)
         self._sender = _get_sender(*sender_params, notify_func=self._notify)
@@ -193,13 +214,15 @@ class PythonSDK:
         :param metadata: A dict with metadata to be attached to the event
         :return:         True if the event was successfully enqueued, else False
         """
+        # Don't allow reporting if the underlying sender is terminated
+        if self._sender.is_terminated:
+            self._notify(consts.LOG_FAILED_SEND,
+                         'Can\'t report events after termination')
+            return False
+
         # Send the event to the queue if it is a dict or a string.
         if isinstance(event, (dict, basestring)):
             formatted_event = self._format_event(event, metadata)
-            if self.blocking:
-                while (self._sender.buffer_max_size * 0.9) < \
-                        self._sender.buffer_current_size:
-                    time.sleep(0.5)
 
             self._sender.enqueue_event(formatted_event)
             return True
@@ -208,7 +231,7 @@ class PythonSDK:
             error_message = ('Received an invalid event of type "%s", the event'
                              ' was discarded. Original event  = "%s"' %
                              (type(event), event))
-            self._notify(consts.SEND_FAILED, error_message)
+            self._notify(consts.LOG_FAILED_SEND, error_message)
             return False
 
     def report_many(self, event_list, metadata=None):
@@ -244,7 +267,7 @@ class PythonSDK:
         linenum = frame.f_lineno
         event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
         event_wrapper[consts.WRAPPER_CALLING_LINE] = str(linenum)
-        event_wrapper[consts.WRAPPER_INPUT_TYPE] = consts.DEFAULT_INPUT_TYPE
+        event_wrapper[consts.WRAPPER_EVENT_TYPE] = self._get_event_type()
         event_wrapper[consts.WRAPPER_INPUT_LABEL] = self.input_label
         event_wrapper[consts.WRAPPER_TOKEN] = self.token
         event_wrapper[consts.WRAPPER_UUID] = str(uuid.uuid4())
@@ -275,8 +298,8 @@ class PythonSDK:
         """
         Calls the callback function and logs messages using the PySDK logger
         """
-        timestamp = time.strftime('[%Y-%m-%d %H:%M:%S]', time.localtime())
-        _logger.info('%s %s', msg_type, str(message))
+        timestamp = datetime.datetime.utcnow()
+        _logger.log(msg_type, str(message))
         self._callback(msg_type, message, timestamp)
 
     @staticmethod
@@ -315,14 +338,13 @@ class _Sender:
     to the server via an SSL-Secure socket.
     """
 
-    def __init__(self, hosts, port, notify, buffer_size, ssl_ca, batch_interval,
-                 batch_size):
+    def __init__(self, hosts, port, buffer_size, ssl_ca, batch_interval,
+                 batch_size, notify):
 
         # This is a concurrent FIFO queue
         self._event_queue = Queue.Queue(buffer_size)
 
         # Set connection vars
-        self._is_connected = threading.Event()
         if isinstance(hosts, str) or isinstance(hosts, unicode):
             hosts = hosts.strip().split(',')
         self._hosts = hosts
@@ -334,6 +356,7 @@ class _Sender:
 
         # Set vars
         self._notify = notify
+        self._is_connected = threading.Event()
         self._is_terminated = threading.Event()
         self._batch_max_size = batch_size
         self._batch_max_interval = batch_interval
@@ -357,7 +380,7 @@ class _Sender:
                 hosts = list(self._hosts)
                 hosts.remove(self._tcp_host)
                 self._tcp_host = random.choice(hosts)
-                self._notify(consts.CONNECTING,
+                self._notify(consts.LOG_CONNECTING,
                              "Selected new server: '%s'" % self._tcp_host)
 
     def _set_socket_vars(self, port, ssl_ca):
@@ -381,16 +404,19 @@ class _Sender:
         :return: Once connected, returns True
         """
         num_of_tries = -1
-        while not self.is_terminated:
+        while not self._is_terminated.isSet():
             if num_of_tries == 20:
-                return False
+                err_msg = 'Failed to connect to "%s" after %d tries' % (
+                    self._hosts, num_of_tries)
+                raise exceptions.NotConnectedError(err_msg)
 
             if num_of_tries == 0:
-                self._notify(consts.CONNECTING, "Connecting the Alooma server.")
+                self._notify(consts.LOG_CONNECTING,
+                             "Connecting to the Alooma server")
             elif num_of_tries > 0:
                 self._notify(
-                        consts.CONNECTING,
-                        "Retrying connection, attempt %d." % (num_of_tries + 1))
+                        consts.LOG_CONNECTING,
+                        "Retrying connection, attempt %d" % (num_of_tries + 1))
 
             if self._sock is not None:
                 self._sock.close()
@@ -401,36 +427,38 @@ class _Sender:
 
                 # Check if need SSL, if so - set up SSL.
                 if self._tcp_ssl_req_cert:
-                    self._notify(consts.SSL_WRAP, "SSL wrapping the socket")
+                    self._notify(consts.LOG_SSL_WRAP, "SSL wrapping the socket")
                     self._sock = ssl.wrap_socket(
-                        self._sock,
-                        cert_reqs=self._tcp_ssl_req_cert,
-                        ca_certs=self._tcp_ssl_ca)
+                            self._sock,
+                            cert_reqs=self._tcp_ssl_req_cert,
+                            ca_certs=self._tcp_ssl_ca)
 
                 self._sock.connect((self._tcp_host, int(self._tcp_port)))
 
             # Trap socket connection Exceptions.
             except Exception as e:
+                if self._is_terminated.isSet():  # Closed on purpose, terminate
+                    raise
                 error_message = ("Exception caught in socket connection: "
                                  "%s" % str(e))
-                self._notify(consts.DISCONNECTED, error_message)
+                self._notify(consts.LOG_DISCONNECTED, error_message)
                 num_of_tries += 1
                 time.sleep(num_of_tries)
 
             else:  # Successfully established a connection.
                 message = "Established connection to the server"
-                self._notify(consts.CONNECTED, message)
+                self._notify(consts.LOG_CONNECTED, message)
                 self._is_connected.set()
                 return True  # The connection was successful
 
     def _start_sender_thread(self):
         """Start the sender thread to initiate messaging."""
-        self._sender_thread = threading.Thread(None, self._sender_main)
+        self._sender_thread = threading.Thread(name='pysdk_sender_thread',
+                                               target=self._sender_main)
         self._sender_thread.daemon = True
-        self._sender_thread.setName("pysdk_sender_thread")
         self._sender_thread.start()
 
-    def _enqueue_batches(self, batches):
+    def _enqueue_batches(self, *batches):
         """
         Enqueues several batches, putting all events in the Sender buffer. Only
         when a prior batch failed and needs to be resent along with the current
@@ -441,6 +469,13 @@ class _Sender:
             for event in batch:
                 self.enqueue_event(event)
 
+    def _send_batch(self, batch):
+        """
+        Sends a batch to the destination server via the socket
+        """
+        batch_string = "\n".join(batch)
+        self._sock.send(batch_string)
+
     def _is_batch_time_over(self, last_batch_time):
         batch_time = (datetime.datetime.utcnow() - last_batch_time)
         return batch_time.total_seconds() > self._batch_max_interval
@@ -448,7 +483,7 @@ class _Sender:
     def _is_batch_full(self, batch):
         return len(batch) > self._batch_max_size
 
-    def _get_batch(self, last_batch_time):
+    def get_batch(self, last_batch_time):
         batch = []
         try:
             while not self._is_batch_time_over(last_batch_time) \
@@ -462,14 +497,6 @@ class _Sender:
             return batch
         else:
             raise exceptions.EmptyBatch
-
-    def _send_batch(self, batch):
-        """
-        Sends a batch to the destination server via the socket
-        :param batch:
-        """
-        batch_string = "\n".join(batch)
-        self._sock.send(batch_string)
 
     def _sender_main(self):
         """
@@ -485,7 +512,7 @@ class _Sender:
                 if not self._is_connected.isSet():
                     self._connect()
 
-                batch = self._get_batch(last_batch_time)
+                batch = self.get_batch(last_batch_time)
                 self._send_batch(batch)
                 former_batch = batch
 
@@ -499,10 +526,10 @@ class _Sender:
                         if ex[0] == errno.EPIPE:
                             error_message = \
                                 'The connection to the server was lost'
-                            self._notify(consts.DISCONNECTED, error_message)
+                            self._notify(consts.LOG_DISCONNECTED, error_message)
                     self._is_connected.clear()
                 else:
-                    self._notify(consts.SEND_FAILED, str(ex))
+                    self._notify(consts.LOG_FAILED_SEND, str(ex))
 
                 if batch:  # Error occurred after dequeuing a batch
                     self._enqueue_batches(
@@ -511,22 +538,25 @@ class _Sender:
             finally:  # Advance last batch time
                 last_batch_time = datetime.datetime.utcnow()
 
-    def enqueue_event(self, event):
+    def enqueue_event(self, event, block):
         """
         Enqueues an event in the buffer to be sent to the Alooma server
         :param event: A dict representing a formatted event to be sent by the
                       sender
         """
+        notified_buffer_full = False
+
+        self._event_queue.put(event, block)
         if self._event_queue.qsize() < self._event_queue.maxsize:
             if self._notified_buffer_full:
                 self._notified_buffer_full = False
-                self._notify(consts.BUFFER_FREED,
-                             "The buffer is not full any more, events will"
+                self._notify(consts.LOG_BUFFER_FREED,
+                             "The buffer is not full anymore, events will"
                              " be queued for reporting")
             self._event_queue.put(event)
         else:
             if not self._notified_buffer_full:
-                self._notify(consts.BUFFER_FULL,
+                self._notify(consts.LOG_BUFFER_FULL,
                              "The buffer is full. Events will be discarded"
                              " until there is buffer space")
                 self._notified_buffer_full = True
@@ -536,10 +566,13 @@ class _Sender:
         Closes the socket used to send data to Alooma
         """
         self._is_terminated.set()
+        flushed = self.__flush()
         if self._sock:
             self._sock.close()
-        self._notify(consts.DISCONNECTED,
-                     'Terminated the connection to %s' % self._hosts)
+            self._is_connected.set()
+        self._notify(consts.LOG_TERMINATED,
+                     'Terminated the connection to %s after flushing %d '
+                     'events' % (self._hosts, flushed))
 
     def __dequeue_event(self, block=True):
         """
@@ -549,9 +582,19 @@ class _Sender:
         event = self._event_queue.get(block)
         return event
 
+    def __flush(self):
+        q_size = self._event_queue.qsize()
+        while not self._event_queue.empty():
+            time.sleep(0.5)
+        return q_size
+
     @property
     def servers(self):
         return self._hosts
+
+    @property
+    def is_terminated(self):
+        return self._is_terminated.isSet()
 
     @property
     def event_buffer(self):
@@ -568,11 +611,6 @@ class _Sender:
     @property
     def is_connected(self):
         return self._is_connected.isSet()
-
-    @property
-    def is_terminated(self):
-        return self._is_terminated.isSet()
-
 
 _sender_instances_lock = threading.Lock()
 _sender_instances = {}
