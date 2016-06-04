@@ -25,8 +25,6 @@ import uuid
 from alooma_pysdk import consts
 
 _logger = logging.getLogger(__name__)
-_sender_instances_lock = threading.Lock()
-_sender_instances = {}
 
 
 def terminate():
@@ -169,14 +167,9 @@ class PythonSDK:
 
         # Get a Sender to get events from the queue and send them.
         # Sender is a Singleton
-        with _sender_instances_lock:
-            existing_sender = _sender_instances.get(servers, None)
-            if existing_sender:
-                self._sender = existing_sender
-            else:
-                self._sender = _Sender(servers, port, self._notify, buffer_size,
-                                       ssl_ca, batch_interval, batch_size)
-                _sender_instances[servers] = self._sender
+        sender_params = (servers, port, buffer_size, ssl_ca,
+                         batch_interval, batch_size)
+        self._sender = _get_sender(*sender_params, notify_func=self._notify)
 
         self.input_label = input_label
         self.token = token
@@ -588,3 +581,20 @@ class _Sender:
     @property
     def is_terminated(self):
         return self._is_terminated.isSet()
+
+
+_sender_instances_lock = threading.Lock()
+_sender_instances = {}
+
+
+def _get_sender(*sender_params, **kwargs):
+    notify_func = kwargs['notify_func']
+    with _sender_instances_lock:
+        existing_sender = _sender_instances.get(sender_params, None)
+        if existing_sender:
+            sender = existing_sender
+            sender._notify = notify_func
+        else:
+            sender = _Sender(*sender_params, notify=notify_func)
+        _sender_instances[sender_params] = sender
+        return sender
