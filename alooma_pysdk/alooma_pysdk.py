@@ -206,12 +206,15 @@ class PythonSDK:
                 event_type = input_label
             self._get_event_type = lambda x: event_type
 
-    def report(self, event, metadata=None):
+    def report(self, event, metadata=None, block=None):
         """
         Reports an event to Alooma by formatting it properly and placing it in
         the buffer to be sent by the Sender instance
         :param event:    A dict / string representing an event
-        :param metadata: A dict with metadata to be attached to the event
+        :param metadata: (Optional) A dict with extra metadata to be attached to
+                         the event
+        :param block:    (Optional) Overrides the default SDK setting to block
+                         if the buffer is full
         :return:         True if the event was successfully enqueued, else False
         """
         # Don't allow reporting if the underlying sender is terminated
@@ -224,7 +227,8 @@ class PythonSDK:
         if isinstance(event, (dict, basestring)):
             formatted_event = self._format_event(event, metadata)
 
-            self._sender.enqueue_event(formatted_event)
+            self._sender.enqueue_event(formatted_event,
+                                       block if block else self.blocking)
             return True
 
         else:  # Event is not a dict nor a string. Deny it.
@@ -234,15 +238,24 @@ class PythonSDK:
             self._notify(consts.LOG_FAILED_SEND, error_message)
             return False
 
-    def report_many(self, event_list, metadata=None):
+    def report_many(self, event_list, metadata=None, block=None):
         """
         Reports all the given events to Alooma by formatting them properly and
         placing them in the buffer to be sent by the Sender instance
         :param event_list: A list of dicts / strings representing events
-        :param metadata:   A dict with metadata to be attached to every event
+        :param metadata: (Optional) A dict with extra metadata to be attached to
+                         the event
+        :param block:    (Optional) Overrides the default SDK setting to block
+                         if the buffer is full
+        :return:         A list with tuples, each containing a failed event
+                         and its original index. An empty list means success
         """
-        for event in event_list:
-            self.report(event, metadata)
+        failed_list = []
+        for index, event in enumerate(event_list):
+            queued_successfully = self.report(event, metadata, block)
+            if not queued_successfully:
+                failed_list.append((index, event))
+        return failed_list
 
     def _format_event(self, orig_event, external_metadata):
         """
@@ -267,7 +280,7 @@ class PythonSDK:
         linenum = frame.f_lineno
         event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
         event_wrapper[consts.WRAPPER_CALLING_LINE] = str(linenum)
-        event_wrapper[consts.WRAPPER_EVENT_TYPE] = self._get_event_type()
+        event_wrapper[consts.WRAPPER_INPUT_TYPE] = consts.INPUT_TYPE
         event_wrapper[consts.WRAPPER_INPUT_LABEL] = self.input_label
         event_wrapper[consts.WRAPPER_TOKEN] = self.token
         event_wrapper[consts.WRAPPER_UUID] = str(uuid.uuid4())
@@ -389,7 +402,6 @@ class _Sender:
         """
         self._sock = None
         self._tcp_port = port
-        self._notified_buffer_full = False
 
         if ssl_ca:
             self._tcp_ssl_req_cert = ssl.CERT_REQUIRED
@@ -467,7 +479,8 @@ class _Sender:
         """
         for batch in batches:
             for event in batch:
-                self.enqueue_event(event)
+                self.enqueue_event(event, False)
+                # TODO: Handle this, it shouldn't fail when buffer is full 
 
     def _send_batch(self, batch):
         """
@@ -543,22 +556,25 @@ class _Sender:
         Enqueues an event in the buffer to be sent to the Alooma server
         :param event: A dict representing a formatted event to be sent by the
                       sender
+        :param block: Whether or not we should block if the event buffer is full
         """
-        notified_buffer_full = False
+        try:
+            self._event_queue.put_nowait(event)
 
-        self._event_queue.put(event, block)
-        if self._event_queue.qsize() < self._event_queue.maxsize:
-            if self._notified_buffer_full:
-                self._notified_buffer_full = False
+            if self._notified_buffer_full:  # Non-blocking and buffer was full
                 self._notify(consts.LOG_BUFFER_FREED,
-                             "The buffer is not full anymore, events will"
-                             " be queued for reporting")
-            self._event_queue.put(event)
-        else:
-            if not self._notified_buffer_full:
+                             'The buffer is not full anymore, events will be '
+                             'queued for reporting')
+                self._notified_buffer_full = False
+
+        except Queue.Full:
+            if block:  # Blocking - should block until space is freed
+                self._event_queue.put(event)
+
+            elif not self._notified_buffer_full:  # Don't block, msg not emitted
                 self._notify(consts.LOG_BUFFER_FULL,
-                             "The buffer is full. Events will be discarded"
-                             " until there is buffer space")
+                             'The buffer is full. Events will be discarded '
+                             'until there is buffer space')
                 self._notified_buffer_full = True
 
     def close(self):

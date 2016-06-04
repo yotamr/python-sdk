@@ -7,7 +7,8 @@ LOG_TERMINATED = LOG_CONNECTED = LOG_BUFFER_FREED = logging.INFO
 LOG_DISCONNECTED = LOG_FAILED_SEND = LOG_BUFFER_FULL = logging.ERROR
 LOG_INIT_FAILED = logging.CRITICAL
 
-# Sleep time consts
+# General constants
+INPUT_TYPE = 'Python SDK'
 EMPTY_BATCH_SLEEP_TIME = 1  # Second
 
 
