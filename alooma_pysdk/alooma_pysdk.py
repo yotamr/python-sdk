@@ -346,7 +346,7 @@ class _Sender:
         # Set vars
         self._notify = notify
         self._batch_mode = batch_mode
-        self.is_terminated = False
+        self._is_terminated = threading.Event()
 
         # Only for batch mode
         self._batch_max_size = batch_size
@@ -560,7 +560,7 @@ class _Sender:
         """
         Closes the socket used to send data to Alooma
         """
-        self.is_terminated = True
+        self._is_terminated.set()
         if self._sock:
             self._sock.close()
         self._notify(DISCONNECTED,
@@ -593,3 +593,7 @@ class _Sender:
     @property
     def is_connected(self):
         return self._is_connected
+
+    @property
+    def is_terminated(self):
+        return self._is_terminated.isSet()
