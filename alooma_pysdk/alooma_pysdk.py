@@ -277,9 +277,9 @@ class PythonSDK:
         # Add the enclosing frame
         frame = inspect.currentframe().f_back.f_back
         filename = frame.f_code.co_filename
-        linenum = frame.f_lineno
+        line_number = frame.f_lineno
         event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
-        event_wrapper[consts.WRAPPER_CALLING_LINE] = str(linenum)
+        event_wrapper[consts.WRAPPER_CALLING_LINE] = str(line_number)
         event_wrapper[consts.WRAPPER_INPUT_TYPE] = consts.INPUT_TYPE
         event_wrapper[consts.WRAPPER_INPUT_LABEL] = self.input_label
         event_wrapper[consts.WRAPPER_TOKEN] = self.token
