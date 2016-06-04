@@ -128,8 +128,10 @@ class PythonSDK:
                                Default is 4096 bytes
         :param batch_interval: (Optional) Determines the batch interval in
                                seconds. Default is 5 seconds
-        :param blocking:       (Optional) If True, blocks the main thread on
-                               report() calls until the event buffer isn't full
+        :param blocking:       (Optional) If False, never blocks the main thread
+                               and instead discards events when the buffer is
+                               full. Default is True - blocks until buffer space
+                               frees up.
         :param input_label:    (Optional) The name that will be assigned to this
                                input in the Alooma UI (default is 'Python SDK')
         :param event_type:     (Optional) The event type to be shown in the
