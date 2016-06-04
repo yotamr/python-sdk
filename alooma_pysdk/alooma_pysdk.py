@@ -241,24 +241,25 @@ class PythonSDK:
 
         # Add ISO6801 timestamp and frame info
         timestamp = datetime.datetime.utcnow().isoformat()
-        event_wrapper['report_time'] = timestamp
+        event_wrapper[consts.WRAPPER_REPORT_TIME] = timestamp
 
         # Add the enclosing frame
         frame = inspect.currentframe().f_back.f_back
         filename = frame.f_code.co_filename
         linenum = frame.f_lineno
-        event_wrapper['calling_file'] = str(filename)
-        event_wrapper['calling_line'] = str(linenum)
-        event_wrapper['input_type'] = 'Python SDK'
-        event_wrapper['input_label'] = self.input_label
-        event_wrapper['token'] = self.token
-        event_wrapper['@uuid'] = str(uuid.uuid4())
+        event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
+        event_wrapper[consts.WRAPPER_CALLING_LINE] = str(linenum)
+        event_wrapper[consts.WRAPPER_INPUT_TYPE] = 'Python SDK'
+        event_wrapper[consts.WRAPPER_INPUT_LABEL] = self.input_label
+        event_wrapper[consts.WRAPPER_TOKEN] = self.token
+        event_wrapper[consts.WRAPPER_UUID] = str(uuid.uuid4())
 
         # Try to set event type. If it throws, put the input label
         try:
-            event_wrapper['event_type'] = self._get_event_type(orig_event)
+            event_wrapper[consts.WRAPPER_EVENT_TYPE] = \
+                self._get_event_type(orig_event)
         except Exception:
-            event_wrapper['event_type'] = self.input_label
+            event_wrapper[consts.WRAPPER_EVENT_TYPE] = self.input_label
 
         # Optionally add external metadata
         if external_metadata and isinstance(external_metadata, dict):
@@ -266,7 +267,7 @@ class PythonSDK:
 
         # JSON encoding and wrapping
         event = _json_enc.encode(orig_event)
-        event_wrapper['message'] = event
+        event_wrapper[consts.WRAPPER_MESSAGE] = event
         event_wrapper = _json_enc.encode(event_wrapper)
 
         # Ensure JSON is newline-terminated
