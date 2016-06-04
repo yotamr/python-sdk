@@ -183,7 +183,7 @@ class PythonSDK:
         if not isinstance(blocking, bool):
             errors.append('Invalid blocking parameter, must be a boolean')
         else:
-            self.blocking = blocking
+            self.is_blocking = blocking
         if errors:
             errors.append('The PySDK will now terminate.')
             error_message = "\n".join(errors)
@@ -230,7 +230,7 @@ class PythonSDK:
             formatted_event = self._format_event(event, metadata)
 
             self._sender.enqueue_event(formatted_event,
-                                       block if block else self.blocking)
+                                       block if block else self.is_blocking)
             return True
 
         else:  # Event is not a dict nor a string. Deny it.
@@ -498,7 +498,7 @@ class _Sender:
     def _is_batch_full(self, batch):
         return len(batch) > self._batch_max_size
 
-    def get_batch(self, last_batch_time):
+    def _get_batch(self, last_batch_time):
         batch = []
         try:
             while not self._is_batch_time_over(last_batch_time) \
@@ -527,7 +527,7 @@ class _Sender:
                 if not self._is_connected.isSet():
                     self._connect()
 
-                batch = self.get_batch(last_batch_time)
+                batch = self._get_batch(last_batch_time)
                 self._send_batch(batch)
                 former_batch = batch
 
