@@ -82,40 +82,44 @@ class PythonSDK:
 
     def __init__(self, token, servers=consts.DEFAULT_ALOOMA_ENDPOINT,
                  port=consts.DEFAULT_ALOOMA_PORT,
-                 input_label=consts.DEFAULT_INPUT_LABEL, event_type=None,
-                 ssl_ca=consts.DEFAULT_CA, callback=None,
-                 buffer_size=consts.DEFAULT_BUFFER_SIZE, blocking=True,
-                 batch_mode=True, batch_size=consts.DEFAULT_BATCH_SIZE):
+                 input_label=consts.DEFAULT_INPUT_LABEL,
+                 event_type=None, ssl_ca=consts.DEFAULT_CA,
+                 callback=None, buffer_size=consts.DEFAULT_BUFFER_SIZE,
+                 blocking=True, batch_size=consts.DEFAULT_BATCH_SIZE,
+                 batch_interval=consts.DEFAULT_BATCH_INTERVAL):
         """
         Initializes the Alooma Python SDK, creating a connection to
         the Alooma server
-        :param token:       Your unique Alooma token for this input. If you
-                            don't have one, please contact support@alooma.com
-        :param servers:     (Optional) A string representing your Alooma server
-                            DNS or IP address, or a list of such strings.
-                            Usually unnecessary.
-        :param port:        (Optional) The destination port (default is 5001)
-        :param ssl_ca:      (Optional) The path to a CA file validating the
-                            server certificate. Default is a provided CA file
-                            for Alooma. If None is passed, a plaintext 
-                            connection will be created.
-        :param callback:    (Optional) a custom callback function to be called
-                            whenever a logged event occurs
-        :param buffer_size: Optionally specify the buffer size to store before
-                            flushing the buffer and sending all of its contents
-        :param batch_mode:  (Optional) If set to false, forces the SDK to flush
-                            immediately for every event
-        :param batch_size:  (Optional) If batch mode is on, determines the batch
-                            size in bytes. Default is 4096
-        :param blocking:    (Optional)
-        :param input_label: (Optional) The name that will be assigned to this
-                            input in the Alooma UI (default is 'Python SDK')
-        :param event_type:  (Optional) The event type to be shown in the UI for
-                            events originating from this PySDK. Can also be a
-                            callable that receives the event as a parameter and
-                            calculates the event type based on the event itself,
-                            e.g. getting it from a field in the event. Default
-                            is the <input_label>.
+        :param token:          Your unique Alooma token for this input. If you
+                               don't have one, please contact support@alooma.com
+        :param servers:        (Optional) A string representing your Alooma
+                               server DNS or IP address, or a list of such
+                               strings. Usually unnecessary.
+        :param port:           (Optional) The destination port (default is 5001)
+        :param ssl_ca:         (Optional) The path to a CA file validating the
+                               server certificate. Default is a provided CA file
+                               for Alooma. If None is passed, a plaintext
+                               connection will be created.
+        :param callback:       (Optional) a custom callback function to be
+                               called whenever a logged event occurs
+        :param buffer_size:    Optionally specify the buffer size to store
+                               before flushing the buffer and sending all of
+                               its
+                               contents
+        :param batch_size:     (Optional) Determines the batch size in bytes.
+                               Default is 4096 bytes
+        :param batch_interval: (Optional) Determines the batch interval in
+                               seconds. Default is 5 seconds
+        :param blocking:       (Optional) If True, blocks the main thread on
+                               report() calls until the event buffer isn't full
+        :param input_label:    (Optional) The name that will be assigned to this
+                               input in the Alooma UI (default is 'Python SDK')
+        :param event_type:     (Optional) The event type to be shown in the
+                               UI for events originating from this PySDK. Can
+                               also be a callable that receives the event as a
+                               parameter and calculates the event type based on
+                               the event itself, e.g. getting it from a field
+                               in the event. Default is the <input_label>.
         """
         _logger.debug('init. locals=%s' % locals())
 
@@ -151,9 +155,6 @@ class PythonSDK:
                 and not callable(event_type):
             errors.append('Invalid event_type. Must be either a string or a '
                           'callable. Instead given: %s' % type(event_type))
-        if not isinstance(batch_mode, bool):
-            errors.append("Invalid Batch_mode flag. "
-                          "Must be a boolean value")
         if not isinstance(batch_size, int):
             errors.append("Invalid batch size, must be an int (in bytes)")
         if not isinstance(blocking, bool):
@@ -174,7 +175,7 @@ class PythonSDK:
                 self._sender = existing_sender
             else:
                 self._sender = _Sender(servers, port, self._notify, buffer_size,
-                                       ssl_ca, batch_mode, batch_size)
+                                       ssl_ca, batch_interval, batch_size)
                 _sender_instances[servers] = self._sender
 
         self.input_label = input_label
@@ -318,7 +319,7 @@ class _Sender:
     to the server via an SSL-Secure socket.
     """
 
-    def __init__(self, hosts, port, notify, buffer_size, ssl_ca, batch_mode,
+    def __init__(self, hosts, port, notify, buffer_size, ssl_ca, batch_interval,
                  batch_size):
 
         # This is a concurrent FIFO queue
@@ -337,10 +338,7 @@ class _Sender:
 
         # Set vars
         self._notify = notify
-        self._batch_mode = batch_mode
         self._is_terminated = threading.Event()
-
-        # Only for batch mode
         self._batch_max_size = batch_size
 
         # Start the sender thread

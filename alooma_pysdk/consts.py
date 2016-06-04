@@ -11,6 +11,7 @@ BUFFER_FREED = 49  # Buffer Freed
 CONFIG_FAILED = 50  # Init failure
 
 # Defaults
+DEFAULT_BATCH_INTERVAL = 5  # Seconds
 DEFAULT_BATCH_SIZE = 4096  # Bytes
 DEFAULT_ALOOMA_ENDPOINT = 'inputs.alooma.com'
 DEFAULT_ALOOMA_PORT = 5001
