@@ -72,6 +72,7 @@ class AloomaEncoder(json.JSONEncoder):
 _json_enc = AloomaEncoder()
 _default_ca = os.path.dirname(os.path.realpath(__file__)) + '/alooma_ca'
 
+
 class PythonSDK:
     """
     The Alooma Python SDK is used to report events to the Alooma platform.
@@ -503,7 +504,7 @@ class _Sender:
         """
         batch = []
         batch_size = 0
-        while not self.is_terminated:
+        while not (self.is_terminated and self._event_queue.empty()):
             while not self._is_connected:
                 self._connect()
                 if self._is_connected:
