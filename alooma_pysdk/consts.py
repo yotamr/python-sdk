@@ -17,7 +17,7 @@ DEFAULT_ALOOMA_ENDPOINT = 'inputs.alooma.com'
 DEFAULT_ALOOMA_PORT = 5001
 DEFAULT_CA = os.path.dirname(os.path.realpath(__file__)) + '/alooma_ca'
 DEFAULT_BUFFER_SIZE = 100000  # Events
-DEFAULT_INPUT_LABEL = 'Python SDK'
+DEFAULT_INPUT_LABEL = DEFAULT_INPUT_TYPE = 'Python SDK'
 
 # Wrapper fieldname consts
 WRAPPER_CALLING_FILE = 'calling_file'

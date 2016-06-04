@@ -249,7 +249,7 @@ class PythonSDK:
         linenum = frame.f_lineno
         event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
         event_wrapper[consts.WRAPPER_CALLING_LINE] = str(linenum)
-        event_wrapper[consts.WRAPPER_INPUT_TYPE] = 'Python SDK'
+        event_wrapper[consts.WRAPPER_INPUT_TYPE] = consts.DEFAULT_INPUT_TYPE
         event_wrapper[consts.WRAPPER_INPUT_LABEL] = self.input_label
         event_wrapper[consts.WRAPPER_TOKEN] = self.token
         event_wrapper[consts.WRAPPER_UUID] = str(uuid.uuid4())
