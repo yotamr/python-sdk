@@ -16,13 +16,14 @@ import threading
 import time
 import uuid
 
+import consts
+
 #####################################################
 # We should refrain for adding more dependencies to #
 # this file to keep it easy for users to install it #
 # on their machines. Especially avoid adding pkgs   #
 # which aren't Python built-ins.                    #
 #####################################################
-from alooma_pysdk import consts
 
 _logger = logging.getLogger(__name__)
 
@@ -422,8 +423,7 @@ class _Sender:
 
     def _start_sender_thread(self):
         """Start the sender thread to initiate messaging."""
-        send_cycle_routine = self._start_send_cycle_batch if \
-            self._batch_mode else self._start_send_cycle
+        send_cycle_routine = self._start_send_cycle_batch
         self._sender_thread = threading.Thread(None,
                                                send_cycle_routine)
         self._sender_thread.daemon = True
