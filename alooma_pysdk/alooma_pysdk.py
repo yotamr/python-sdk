@@ -22,16 +22,7 @@ import uuid
 # on their machines. Especially avoid adding pkgs   #
 # which aren't Python built-ins.                    #
 #####################################################
-
-# Explicit enum for logging message types
-SSL_WRAP = 10  # Wrapping socket in SSL
-CONNECTING = 19  # Connection attempts to the LogStash server
-CONNECTED = 20  # Successful connection
-DISCONNECTED = 30  # Disconnections
-SEND_FAILED = 40  # Message sending failure
-BUFFER_FULL = 48  # Buffer Full
-BUFFER_FREED = 49  # Buffer Freed
-CONFIG_FAILED = 50  # Init failure
+from alooma_pysdk import consts
 
 _logger = logging.getLogger(__name__)
 _sender_instances_lock = threading.Lock()
@@ -70,7 +61,6 @@ class AloomaEncoder(json.JSONEncoder):
 
 
 _json_enc = AloomaEncoder()
-_default_ca = os.path.dirname(os.path.realpath(__file__)) + '/alooma_ca'
 
 
 class PythonSDK:
@@ -90,10 +80,12 @@ class PythonSDK:
        function documentation).
     """
 
-    def __init__(self, token, servers='inputs.alooma.io', port=5001,
-                 input_label='Python SDK', event_type=None, ssl_ca=_default_ca,
-                 callback=None, buffer_size=100000, blocking=True,
-                 batch_mode=True, batch_size=4096):
+    def __init__(self, token, servers=consts.DEFAULT_ALOOMA_ENDPOINT,
+                 port=consts.DEFAULT_ALOOMA_PORT,
+                 input_label=consts.DEFAULT_INPUT_LABEL, event_type=None,
+                 ssl_ca=consts.DEFAULT_CA, callback=None,
+                 buffer_size=consts.DEFAULT_BUFFER_SIZE, blocking=True,
+                 batch_mode=True, batch_size=consts.DEFAULT_BATCH_SIZE):
         """
         Initializes the Alooma Python SDK, creating a connection to
         the Alooma server
@@ -171,7 +163,7 @@ class PythonSDK:
         if errors:
             errors.append('The PySDK will now terminate.')
             error_message = "\n".join(errors)
-            self._notify(CONFIG_FAILED, error_message)
+            self._notify(consts.CONFIG_FAILED, error_message)
             raise ValueError(error_message)
 
         # Get a Sender to get events from the queue and send them.
@@ -220,7 +212,7 @@ class PythonSDK:
             error_message = ('Received an invalid event of type "%s", the event'
                              ' was discarded. Original event  = "%s"' %
                              (type(event), event))
-            self._notify(SEND_FAILED, error_message)
+            self._notify(consts.SEND_FAILED, error_message)
             return False
 
     def report_many(self, event_list, metadata=None):
@@ -370,7 +362,7 @@ class _Sender:
                 hosts = list(self._hosts)
                 hosts.remove(self._tcp_host)
                 self._tcp_host = random.choice(hosts)
-                self._notify(CONNECTING,
+                self._notify(consts.CONNECTING,
                              "Selected new server: '%s'" % self._tcp_host)
 
     def _set_socket_vars(self, port, ssl_ca):
@@ -399,10 +391,10 @@ class _Sender:
                 return False
 
             if num_of_tries == 0:
-                self._notify(CONNECTING, "Connecting the Alooma server.")
+                self._notify(consts.CONNECTING, "Connecting the Alooma server.")
             elif num_of_tries > 0:
                 self._notify(
-                        CONNECTING,
+                        consts.CONNECTING,
                         "Retrying connection, attempt %d." % (num_of_tries + 1))
 
             if self._sock is not None:
@@ -414,7 +406,7 @@ class _Sender:
 
                 # Check if need SSL, if so - set up SSL.
                 if self._tcp_ssl_req_cert:
-                    self._notify(SSL_WRAP, "SSL wrapping the socket")
+                    self._notify(consts.SSL_WRAP, "SSL wrapping the socket")
                     self._sock = ssl.wrap_socket(
                         self._sock,
                         cert_reqs=self._tcp_ssl_req_cert,
@@ -426,13 +418,13 @@ class _Sender:
             except Exception as e:
                 error_message = ("Exception caught in socket connection: "
                                  "%s" % str(e))
-                self._notify(DISCONNECTED, error_message)
+                self._notify(consts.DISCONNECTED, error_message)
                 num_of_tries += 1
                 time.sleep(num_of_tries)
 
             else:  # Successfully established a connection.
                 message = "Established connection to the server"
-                self._notify(CONNECTED, message)
+                self._notify(consts.CONNECTED, message)
                 self._is_connected = True
                 return True  # The connection was successful
 
@@ -467,14 +459,14 @@ class _Sender:
                     if e[0] == errno.EPIPE:
                         error_message = ("The connection to the server"
                                          " was lost")
-                        self._notify(DISCONNECTED, error_message)
+                        self._notify(consts.DISCONNECTED, error_message)
                 else:
-                    self._notify(SEND_FAILED, e)
+                    self._notify(consts.SEND_FAILED, e)
                 self._is_connected = False
             except Exception, ex:  # Trap non-socket-error Exceptions.
                 self.enqueue_event(former_event)
                 self.enqueue_event(event)
-                self._notify(SEND_FAILED, ex)
+                self._notify(consts.SEND_FAILED, ex)
 
     def _enqueue_batches(self, batches):
         """
@@ -528,13 +520,13 @@ class _Sender:
                 if isinstance(e.args, tuple):
                     if e[0] == errno.EPIPE:
                         error_message = "The connection to the server was lost"
-                        self._notify(DISCONNECTED, error_message)
+                        self._notify(consts.DISCONNECTED, error_message)
                     else:
-                        self._notify(SEND_FAILED, e)
+                        self._notify(consts.SEND_FAILED, e)
                 self._is_connected = False
             except Exception, ex:  # Trap non-socket-error Exceptions.
                 self._enqueue_batches([batch, former_batch])
-                self._notify(SEND_FAILED, ex)
+                self._notify(consts.SEND_FAILED, ex)
 
     def enqueue_event(self, event):
         """
@@ -545,13 +537,13 @@ class _Sender:
         if self._event_queue.qsize() < self._event_queue.maxsize:
             if self._notified_buffer_full:
                 self._notified_buffer_full = False
-                self._notify(BUFFER_FREED,
+                self._notify(consts.BUFFER_FREED,
                              "The buffer is not full any more, events will"
                              " be queued for reporting")
             self._event_queue.put(event)
         else:
             if not self._notified_buffer_full:
-                self._notify(BUFFER_FULL,
+                self._notify(consts.BUFFER_FULL,
                              "The buffer is full. Events will be discarded"
                              " until there is buffer space")
                 self._notified_buffer_full = True
@@ -563,7 +555,7 @@ class _Sender:
         self._is_terminated.set()
         if self._sock:
             self._sock.close()
-        self._notify(DISCONNECTED,
+        self._notify(consts.DISCONNECTED,
                      'Terminated the connection to %s' % self._hosts)
 
     def __dequeue_event(self, block=True):
