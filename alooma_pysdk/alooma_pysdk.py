@@ -24,29 +24,43 @@ import uuid
 #####################################################
 
 # Explicit enum for logging message types
-SSL_WRAP = 10  # Wrapping socket in SSL
-CONNECTING = 19  # Connection attempts to the LogStash server
-CONNECTED = 20  # Successful connection
-DISCONNECTED = 30  # Disconnections
-SEND_FAILED = 40  # Message sending failure
-BUFFER_FULL = 48  # Buffer Full
-BUFFER_FREED = 49  # Buffer Freed
-CONFIG_FAILED = 50  # Init failure
+LOG_SSL_WRAP = LOG_CONNECTING = LOG_EXIT_FLUSH = logging.DEBUG
+LOG_CONNECTED = LOG_BUFFER_FREED = logging.INFO
+LOG_DISCONNECTED = LOG_FAILED_SEND = LOG_BUFFER_FULL = logging.ERROR
+LOG_INIT_FAILED = logging.CRITICAL
 
-_logger = logging.getLogger(__name__)
 _sender_instances_lock = threading.Lock()
 _sender_instances = {}
 
 
+def __get_logger():
+    """
+    If the logger wasn't configured by the calling script, configures the
+    default logger - logs all messages to STDOUT and doesn't propagate to root
+    :return: The 'alooma_pysdk' logger from the built-in library `logging`
+    """
+    logger = logging.getLogger(__name__)
+    if logger.level == logging.NOTSET:
+        logger.addHandler(logging.StreamHandler())
+        logger.handlers[0].level = logger.level = logging.DEBUG
+        logger.handlers[0].formatter = logging.Formatter(
+                '%(asctime)s [%(levelname)s] {}: %(message)s'.format(__name__),
+                '%Y-%m-%dT%H:%M:%S')
+        logger.propagate = 0
+        logger.warn('Using the default logger configuration')
+    return logger
+_logger = __get_logger()
+
+
 def terminate():
     """
-    Stops all the active Senders by closing their sockets
-    :return:
+    Stops all the active Senders by flushing the buffers and closing the
+    underlying sockets
     """
     with _sender_instances_lock:
         for sender_key, sender in _sender_instances.iteritems():
             sender.close()
-            del _sender_instances[sender_key]
+        _sender_instances.clear()
 
 
 # Declare and instantiate an AloomaEncoder
@@ -72,6 +86,7 @@ class AloomaEncoder(json.JSONEncoder):
 _json_enc = AloomaEncoder()
 _default_ca = os.path.dirname(os.path.realpath(__file__)) + '/alooma_ca'
 
+
 class PythonSDK:
     """
     The Alooma Python SDK is used to report events to the Alooma platform.
@@ -89,7 +104,7 @@ class PythonSDK:
        function documentation).
     """
 
-    def __init__(self, token, servers='inputs.alooma.io', port=5001,
+    def __init__(self, token, servers='inputs.alooma.com', port=5001,
                  input_label='Python SDK', event_type=None, ssl_ca=_default_ca,
                  callback=None, buffer_size=100000, blocking=True,
                  batch_mode=True, batch_size=4096):
@@ -170,7 +185,7 @@ class PythonSDK:
         if errors:
             errors.append('The PySDK will now terminate.')
             error_message = "\n".join(errors)
-            self._notify(CONFIG_FAILED, error_message)
+            self._notify(LOG_INIT_FAILED, error_message)
             raise ValueError(error_message)
 
         # Get a Sender to get events from the queue and send them.
@@ -204,6 +219,12 @@ class PythonSDK:
         :param metadata: A dict with metadata to be attached to the event
         :return:         True if the event was successfully enqueued, else False
         """
+        # Don't allow reporting if the underlying sender is terminated
+        if self._sender.is_terminated:
+            self._notify(LOG_FAILED_SEND,
+                         'Can\'t report events after termination')
+            return False
+
         # Send the event to the queue if it is a dict or a string.
         if isinstance(event, (dict, basestring)):
             formatted_event = self._format_event(event, metadata)
@@ -219,7 +240,7 @@ class PythonSDK:
             error_message = ('Received an invalid event of type "%s", the event'
                              ' was discarded. Original event  = "%s"' %
                              (type(event), event))
-            self._notify(SEND_FAILED, error_message)
+            self._notify(LOG_FAILED_SEND, error_message)
             return False
 
     def report_many(self, event_list, metadata=None):
@@ -285,8 +306,8 @@ class PythonSDK:
         """
         Calls the callback function and logs messages using the PySDK logger
         """
-        timestamp = time.strftime('[%Y-%m-%d %H:%M:%S]', time.localtime())
-        _logger.info('%s %s', msg_type, str(message))
+        timestamp = datetime.datetime.utcnow()
+        _logger.log(msg_type, str(message))
         self._callback(msg_type, message, timestamp)
 
     @staticmethod
@@ -369,7 +390,7 @@ class _Sender:
                 hosts = list(self._hosts)
                 hosts.remove(self._tcp_host)
                 self._tcp_host = random.choice(hosts)
-                self._notify(CONNECTING,
+                self._notify(LOG_CONNECTING,
                              "Selected new server: '%s'" % self._tcp_host)
 
     def _set_socket_vars(self, port, ssl_ca):
@@ -398,11 +419,11 @@ class _Sender:
                 return False
 
             if num_of_tries == 0:
-                self._notify(CONNECTING, "Connecting the Alooma server.")
+                self._notify(LOG_CONNECTING, "Connecting to the Alooma server")
             elif num_of_tries > 0:
                 self._notify(
-                        CONNECTING,
-                        "Retrying connection, attempt %d." % (num_of_tries + 1))
+                        LOG_CONNECTING,
+                        "Retrying connection, attempt %d" % (num_of_tries + 1))
 
             if self._sock is not None:
                 self._sock.close()
@@ -413,7 +434,7 @@ class _Sender:
 
                 # Check if need SSL, if so - set up SSL.
                 if self._tcp_ssl_req_cert:
-                    self._notify(SSL_WRAP, "SSL wrapping the socket")
+                    self._notify(LOG_SSL_WRAP, "SSL wrapping the socket")
                     self._sock = ssl.wrap_socket(
                         self._sock,
                         cert_reqs=self._tcp_ssl_req_cert,
@@ -423,15 +444,17 @@ class _Sender:
 
             # Trap socket connection Exceptions.
             except Exception as e:
+                if self.is_terminated:  # Socket closed on purpose, terminate
+                    raise
                 error_message = ("Exception caught in socket connection: "
                                  "%s" % str(e))
-                self._notify(DISCONNECTED, error_message)
+                self._notify(LOG_DISCONNECTED, error_message)
                 num_of_tries += 1
                 time.sleep(num_of_tries)
 
             else:  # Successfully established a connection.
                 message = "Established connection to the server"
-                self._notify(CONNECTED, message)
+                self._notify(LOG_CONNECTED, message)
                 self._is_connected = True
                 return True  # The connection was successful
 
@@ -460,20 +483,22 @@ class _Sender:
                 event = self.__dequeue_event()
                 self._sock.send(event)
             except socket.error, e:  # Socket DCed or is faulted
+                if self.is_terminated:  # Socket closed on purpose, terminate
+                    return
                 self.enqueue_event(former_event)
                 self.enqueue_event(event)
                 if isinstance(e.args, tuple):
                     if e[0] == errno.EPIPE:
                         error_message = ("The connection to the server"
                                          " was lost")
-                        self._notify(DISCONNECTED, error_message)
+                        self._notify(LOG_DISCONNECTED, error_message)
                 else:
-                    self._notify(SEND_FAILED, e)
+                    self._notify(LOG_FAILED_SEND, e)
                 self._is_connected = False
             except Exception, ex:  # Trap non-socket-error Exceptions.
                 self.enqueue_event(former_event)
                 self.enqueue_event(event)
-                self._notify(SEND_FAILED, ex)
+                self._notify(LOG_FAILED_SEND, ex)
 
     def _enqueue_batches(self, batches):
         """
@@ -497,13 +522,13 @@ class _Sender:
     def _start_send_cycle_batch(self):
         """
         Runs on a pysdk_sender_worker_thread and handles sending
-        events to the LogStash server. Events are sent every
+        events to the Alooma server. Events are sent every
         <self._batch_interval> seconds or whenever batch size reaches
         <self._batch_size>
         """
         batch = []
         batch_size = 0
-        while not self.is_terminated:
+        while not (self.is_terminated and self._event_queue.empty()):
             while not self._is_connected:
                 self._connect()
                 if self._is_connected:
@@ -523,17 +548,19 @@ class _Sender:
                 else:
                     time.sleep(1)
             except socket.error, e:  # Socket DCed or is faulted
+                if self.is_terminated:  # Socket closed on purpose, terminate
+                    return
                 self._enqueue_batches([batch, former_batch])
                 if isinstance(e.args, tuple):
                     if e[0] == errno.EPIPE:
                         error_message = "The connection to the server was lost"
-                        self._notify(DISCONNECTED, error_message)
+                        self._notify(LOG_DISCONNECTED, error_message)
                     else:
-                        self._notify(SEND_FAILED, e)
+                        self._notify(LOG_FAILED_SEND, e)
                 self._is_connected = False
             except Exception, ex:  # Trap non-socket-error Exceptions.
                 self._enqueue_batches([batch, former_batch])
-                self._notify(SEND_FAILED, ex)
+                self._notify(LOG_FAILED_SEND, ex)
 
     def enqueue_event(self, event):
         """
@@ -544,13 +571,13 @@ class _Sender:
         if self._event_queue.qsize() < self._event_queue.maxsize:
             if self._notified_buffer_full:
                 self._notified_buffer_full = False
-                self._notify(BUFFER_FREED,
-                             "The buffer is not full any more, events will"
+                self._notify(LOG_BUFFER_FREED,
+                             "The buffer is not full anymore, events will"
                              " be queued for reporting")
             self._event_queue.put(event)
         else:
             if not self._notified_buffer_full:
-                self._notify(BUFFER_FULL,
+                self._notify(LOG_BUFFER_FULL,
                              "The buffer is full. Events will be discarded"
                              " until there is buffer space")
                 self._notified_buffer_full = True
@@ -560,10 +587,13 @@ class _Sender:
         Closes the socket used to send data to Alooma
         """
         self.is_terminated = True
+        flushed = self.__flush()
         if self._sock:
             self._sock.close()
-        self._notify(DISCONNECTED,
-                     'Terminated the connection to %s' % self._hosts)
+            self._is_connected = False
+        self._notify(LOG_DISCONNECTED,
+                     'Terminated the connection to %s after flushing %d '
+                     'events' % (self._hosts, flushed))
 
     def __dequeue_event(self, block=True):
         """
@@ -572,6 +602,12 @@ class _Sender:
         """
         event = self._event_queue.get(block)
         return event
+
+    def __flush(self):
+        q_size = self._event_queue.qsize()
+        while not self._event_queue.empty():
+            time.sleep(0.5)
+        return q_size
 
     @property
     def servers(self):
