@@ -48,17 +48,6 @@ def __get_logger():
 _logger = __get_logger()
 
 
-def terminate():
-    """
-    Stops all the active Senders by flushing the buffers and closing the
-    underlying sockets
-    """
-    with _sender_instances_lock:
-        for sender_key, sender in _sender_instances.iteritems():
-            sender.close()
-        _sender_instances.clear()
-
-
 # Declare and instantiate an AloomaEncoder
 # This encoder allows JSON encoding of additional types
 class AloomaEncoder(json.JSONEncoder):
@@ -259,14 +248,14 @@ class PythonSDK:
                 failed_list.append((index, event))
         return failed_list
 
-    def _format_event(self, orig_event, external_metadata):
+    def _format_event(self, orig_event, external_metadata=None):
         """
         Format the event to the expected Alooma format, packing it into a
         message field and adding metadata
         :param orig_event:         The original event that was sent, should be
                                    dict, str or unicode.
-        :param external_metadata:  a dict containing metadata to add to the
-                                   event
+        :param external_metadata:  (Optional) a dict containing metadata to add
+                                   to the event
         :return:                   a dict with the original event in a 'message'
                                    field and all the supplied metadata
         """
@@ -615,26 +604,20 @@ class _Sender:
         return self._is_terminated.isSet()
 
     @property
-    def event_buffer(self):
-        return self._event_queue
-
-    @property
-    def buffer_max_size(self):
-        return self.event_buffer.maxsize
-
-    @property
-    def buffer_current_size(self):
-        return self.event_buffer.qsize()
-
-    @property
     def is_connected(self):
         return self._is_connected.isSet()
 
+
+# Sender instance management
 _sender_instances_lock = threading.Lock()
 _sender_instances = {}
 
 
 def _get_sender(*sender_params, **kwargs):
+    """
+    Utility function acting as a Sender factory - ensures senders don't get
+    created twice of more for the same target server
+    """
     notify_func = kwargs['notify_func']
     with _sender_instances_lock:
         existing_sender = _sender_instances.get(sender_params, None)
@@ -645,3 +628,14 @@ def _get_sender(*sender_params, **kwargs):
             sender = _Sender(*sender_params, notify=notify_func)
         _sender_instances[sender_params] = sender
         return sender
+
+
+def terminate():
+    """
+    Stops all the active Senders by flushing the buffers and closing the
+    underlying sockets
+    """
+    with _sender_instances_lock:
+        for sender_key, sender in _sender_instances.iteritems():
+            sender.close()
+        _sender_instances.clear()
