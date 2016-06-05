@@ -510,7 +510,7 @@ class _Sender:
         batch size reaches <self._batch_size>
         """
         last_batch_time = datetime.datetime.utcnow()
-        former_former_batch = former_batch = batch = None
+        former_batch = batch = None
 
         while not (self._is_terminated.isSet() and self._event_queue.empty()):
             try:
