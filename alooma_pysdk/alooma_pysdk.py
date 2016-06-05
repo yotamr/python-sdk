@@ -211,7 +211,7 @@ class PythonSDK:
         # Don't allow reporting if the underlying sender is terminated
         if self._sender.is_terminated:
             self._notify(consts.LOG_FAILED_SEND,
-                         'Can\'t report events after termination')
+                         consts.LOG_MSG_REPORT_AFTER_TERMINATION)
             return False
 
         # Send the event to the queue if it is a dict or a string.
@@ -222,9 +222,7 @@ class PythonSDK:
                     formatted_event, block if block else self.is_blocking)
 
         else:  # Event is not a dict nor a string. Deny it.
-            error_message = ('Received an invalid event of type "%s", the event'
-                             ' was discarded. Original event  = "%s"' %
-                             (type(event), event))
+            error_message = (consts.LOG_MSG_BAD_EVENT % (type(event), event))
             self._notify(consts.LOG_FAILED_SEND, error_message)
             return False
 
@@ -384,7 +382,7 @@ class _Sender:
                 hosts.remove(self._tcp_host)
                 self._tcp_host = random.choice(hosts)
                 self._notify(consts.LOG_CONNECTING,
-                             "Selected new server: '%s'" % self._tcp_host)
+                             consts.LOG_MSG_NEW_SERVER % self._tcp_host)
 
     def _set_socket_vars(self, port, ssl_ca):
         """

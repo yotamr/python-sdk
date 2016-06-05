@@ -12,6 +12,10 @@ LOG_MSG_BUFFER_FULL = 'The buffer is full. Events will be discarded until ' \
                       'buffer space is freed'
 LOG_MSG_BUFFER_FREED = 'The buffer is not full anymore, events will be ' \
                        'queued for reporting'
+LOG_MSG_REPORT_AFTER_TERMINATION = 'Can\'t report events after termination'
+LOG_MSG_BAD_EVENT = 'Received an invalid event of type "%s", the event was ' \
+                    'discarded. Original event  = "%s"'
+LOG_MSG_NEW_SERVER = 'Selected new server: "%s"'
 
 # General constants
 INPUT_TYPE = 'Python SDK'
