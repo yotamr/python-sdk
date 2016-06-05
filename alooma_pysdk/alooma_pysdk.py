@@ -218,9 +218,8 @@ class PythonSDK:
         if isinstance(event, (dict, basestring)):
             formatted_event = self._format_event(event, metadata)
 
-            self._sender.enqueue_event(formatted_event,
-                                       block if block else self.is_blocking)
-            return True
+            return self._sender.enqueue_event(
+                    formatted_event, block if block else self.is_blocking)
 
         else:  # Event is not a dict nor a string. Deny it.
             error_message = ('Received an invalid event of type "%s", the event'
@@ -492,7 +491,7 @@ class _Sender:
         try:
             while not self._is_batch_time_over(last_batch_time) \
                     and not self._is_batch_full(batch):
-                batch.append(self._event_queue.get_nowait())
+                batch.append(self.__dequeue_event())
 
         except Queue.Empty:  # No more events to fetch
             pass
@@ -535,9 +534,8 @@ class _Sender:
                 else:
                     self._notify(consts.LOG_FAILED_SEND, str(ex))
 
-                if batch:  # Error occurred after dequeuing a batch
-                    self._enqueue_batches(
-                            *[b for b in [former_batch, batch] if b])
+                # Re-enqueue the former batch and if already pulled, this batch
+                self._enqueue_batches(*[b for b in [former_batch, batch] if b])
 
             finally:  # Advance last batch time
                 last_batch_time = datetime.datetime.utcnow()
@@ -548,14 +546,14 @@ class _Sender:
         :param event: A dict representing a formatted event to be sent by the
                       sender
         :param block: Whether or not we should block if the event buffer is full
+        :return: True if the event was enqueued successfully, else False
         """
         try:
             self._event_queue.put_nowait(event)
 
             if self._notified_buffer_full:  # Non-blocking and buffer was full
                 self._notify(consts.LOG_BUFFER_FREED,
-                             'The buffer is not full anymore, events will be '
-                             'queued for reporting')
+                             consts.LOG_MSG_BUFFER_FREED)
                 self._notified_buffer_full = False
 
         except Queue.Full:
@@ -563,10 +561,11 @@ class _Sender:
                 self._event_queue.put(event)
 
             elif not self._notified_buffer_full:  # Don't block, msg not emitted
-                self._notify(consts.LOG_BUFFER_FULL,
-                             'The buffer is full. Events will be discarded '
-                             'until there is buffer space')
+                self._notify(consts.LOG_BUFFER_FULL, consts.LOG_MSG_BUFFER_FULL)
                 self._notified_buffer_full = True
+                return False
+
+        return True
 
     def close(self):
         """
@@ -581,12 +580,12 @@ class _Sender:
                      'Terminated the connection to %s after flushing %d '
                      'events' % (self._hosts, flushed))
 
-    def __dequeue_event(self, block=True):
+    def __dequeue_event(self, block=True, timeout=1):
         """
         Dequeues an event from the queue to be sent to the Alooma server.
         Used only by the Sender instance
         """
-        event = self._event_queue.get(block)
+        event = self._event_queue.get(block, timeout)
         return event
 
     def __flush(self):

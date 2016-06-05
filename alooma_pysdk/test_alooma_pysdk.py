@@ -116,6 +116,34 @@ class TestPythonSDK(object):
                       formatted_json[custom_metadata_field])
 
 
+class TestSender(object):
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    def test_enqueue_event(self, start_thread_mock):
+        # Test that event is enqueued properly
+        notify_mock = Mock()
+        sender = apysdk._Sender('mockHost', 1234, 1, 'asd', 10, 10,
+                                notify_mock)
+        some_event = {'event': 1}
+        ret = sender.enqueue_event(some_event, False)
+        assert_true(ret)
+        assert_equals(sender._event_queue.get_nowait(), some_event)
+
+        # Test failing with notification when buffer is full
+        sender.enqueue_event(some_event, False)
+        assert_false(sender.enqueue_event(some_event, False))
+        assert_equals(notify_mock.call_args[0], (consts.LOG_BUFFER_FULL,
+                                                 consts.LOG_MSG_BUFFER_FULL))
+        assert_true(sender._notified_buffer_full)
+
+        # Test recovering when buffer frees up
+        sender._event_queue.get_nowait()
+        assert_true(sender.enqueue_event(some_event, False))
+        assert_equals(notify_mock.call_args[0], (consts.LOG_BUFFER_FREED,
+                                                 consts.LOG_MSG_BUFFER_FREED))
+
+
+
+
 
 
 

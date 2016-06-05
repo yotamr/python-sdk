@@ -7,10 +7,14 @@ LOG_TERMINATED = LOG_CONNECTED = LOG_BUFFER_FREED = logging.INFO
 LOG_DISCONNECTED = LOG_FAILED_SEND = LOG_BUFFER_FULL = logging.ERROR
 LOG_INIT_FAILED = logging.CRITICAL
 
+# Log messages
+LOG_MSG_BUFFER_FULL = 'The buffer is full. Events will be discarded until ' \
+                      'buffer space is freed'
+LOG_MSG_BUFFER_FREED = 'The buffer is not full anymore, events will be ' \
+                       'queued for reporting'
+
 # General constants
 INPUT_TYPE = 'Python SDK'
-EMPTY_BATCH_SLEEP_TIME = 1  # Second
-
 
 # Defaults
 DEFAULT_BATCH_INTERVAL = 5  # Seconds
@@ -31,3 +35,4 @@ WRAPPER_UUID = '@uuid'
 WRAPPER_EVENT_TYPE = 'event_type'
 WRAPPER_MESSAGE = 'message'
 WRAPPER_REPORT_TIME = 'report_time'
+
