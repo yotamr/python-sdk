@@ -466,6 +466,7 @@ class _Sender:
         :param batches: a list of batches, each of which is a list of events
         """
         for batch in batches:
+            print batch
             for event in batch:
                 self.enqueue_event(event, False)
                 # TODO: Handle this, it shouldn't fail when buffer is full 
@@ -474,22 +475,25 @@ class _Sender:
         """
         Sends a batch to the destination server via the socket
         """
-        batch_string = "\n".join(batch)
+        batch_string = ''.join(batch)
         self._sock.send(batch_string)
 
     def _is_batch_time_over(self, last_batch_time):
         batch_time = (datetime.datetime.utcnow() - last_batch_time)
         return batch_time.total_seconds() > self._batch_max_interval
 
-    def _is_batch_full(self, batch):
-        return len(batch) > self._batch_max_size
+    def _is_batch_full(self, batch_len):
+        return batch_len > self._batch_max_size
 
     def _get_batch(self, last_batch_time):
         batch = []
+        batch_len = 0
         try:
             while not self._is_batch_time_over(last_batch_time) \
-                    and not self._is_batch_full(batch):
-                batch.append(self.__dequeue_event())
+                    and not self._is_batch_full(batch_len):
+                event = self.__dequeue_event()
+                batch.append(event)
+                batch_len += len(event)
 
         except Queue.Empty:  # No more events to fetch
             pass
@@ -506,7 +510,7 @@ class _Sender:
         batch size reaches <self._batch_size>
         """
         last_batch_time = datetime.datetime.utcnow()
-        former_batch = batch = None
+        former_former_batch = former_batch = batch = None
 
         while not (self._is_terminated.isSet() and self._event_queue.empty()):
             try:
@@ -522,11 +526,10 @@ class _Sender:
 
             except Exception as ex:
                 if isinstance(ex, socket.error):
-                    print ex, ex.errno, ex.strerror
                     if isinstance(ex.args, tuple):
                         if ex[0] == errno.EPIPE:
                             error_message = \
-                                'The connection to the server was lost'
+                                consts.LOG_MSG_CONNECTION_LOST % ex.strerror
                             self._notify(consts.LOG_DISCONNECTED, error_message)
                     self._is_connected.clear()
                 else:

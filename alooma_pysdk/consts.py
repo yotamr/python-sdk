@@ -16,9 +16,11 @@ LOG_MSG_REPORT_AFTER_TERMINATION = 'Can\'t report events after termination'
 LOG_MSG_BAD_EVENT = 'Received an invalid event of type "%s", the event was ' \
                     'discarded. Original event  = "%s"'
 LOG_MSG_NEW_SERVER = 'Selected new server: "%s"'
+LOG_MSG_CONNECTION_LOST = 'The connection to the server was lost: %s'
 
 # General constants
 INPUT_TYPE = 'Python SDK'
+EMPTY_BATCH_SLEEP_TIME = 2  # Seconds
 
 # Defaults
 DEFAULT_BATCH_INTERVAL = 5  # Seconds

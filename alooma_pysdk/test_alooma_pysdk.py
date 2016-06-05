@@ -1,16 +1,23 @@
 import json
 
+import datetime
+import socket
+import threading
+from unittest import TestCase
+
 from mock import patch, Mock
+from nose.plugins.attrib import attr
 from nose.tools import assert_equals, assert_true, assert_false
 import consts
 import alooma_pysdk as apysdk
+import pysdk_exceptions as exceptions
 
 STRING_EVENT_REPORTED = 'reported_event'
 ALL_WRAPPER_FIELDS = [getattr(consts, f) for f in consts.__dict__
                       if f.startswith('WRAPPER_')]
 
 
-class TestPythonSDK(object):
+class TestPythonSDK(TestCase):
 
     def _get_python_sdk(self, *args, **kwargs):
         self.sender_mock = Mock()
@@ -107,7 +114,6 @@ class TestPythonSDK(object):
         formatted = sdk._format_event(
                 event, {custom_metadata_field: custom_metadata_value})
         formatted_json = json.loads(formatted)
-        print formatted_json
         # Assert message inserted properly
         assert_equals('"' + unicode(event) + '"',
                       formatted_json[consts.WRAPPER_MESSAGE])
@@ -116,7 +122,7 @@ class TestPythonSDK(object):
                       formatted_json[custom_metadata_field])
 
 
-class TestSender(object):
+class TestSender(TestCase):
     @patch.object(apysdk._Sender, '_start_sender_thread')
     def test_enqueue_event(self, start_thread_mock):
         # Test that event is enqueued properly
@@ -140,6 +146,99 @@ class TestSender(object):
         assert_true(sender.enqueue_event(some_event, False))
         assert_equals(notify_mock.call_args[0], (consts.LOG_BUFFER_FREED,
                                                  consts.LOG_MSG_BUFFER_FREED))
+
+    @attr('slow')
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    def test_get_batch_empy_queue_raises(self, start_thread_mock):
+        notify_mock = Mock()
+        buffer_size = 1000
+        sender = apysdk._Sender('mockHost', 1234, buffer_size, 'asd', 100, 100,
+                                notify_mock)
+
+        # Assert empty queue raises EmptyBatch
+        last_batch_time = datetime.datetime.utcnow()
+        raised = False
+        try:
+            sender._get_batch(last_batch_time)
+        except exceptions.EmptyBatch:
+            raised = True
+        assert_true(raised)
+
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    def test_get_batch(self, start_thread_mock):
+        notify_mock = Mock()
+        buffer_size = 1000
+        sender = apysdk._Sender('mockHost', 1234, buffer_size, 'asd', 100, 100,
+                                notify_mock)
+
+        # Populate the queue
+        for i in range(buffer_size):
+            sender._event_queue.put_nowait(
+                    json.dumps({'num': i, 'some_field': 'some_val'}))
+
+        # Assert we comply with the max batch size (ignore last event)
+        last_batch_time = datetime.datetime.utcnow()
+        batch = sender._get_batch(last_batch_time)
+        assert_true(len(''.join(batch[:-1])) < sender._batch_max_size)
+
+        # Assert we comply with the max batch interval
+        last_batch_time = datetime.datetime.utcnow() - datetime.timedelta(
+                seconds=sender._batch_max_interval)
+        try:
+            raised_empty_batch = False
+            sender._get_batch(last_batch_time)
+        except exceptions.EmptyBatch:
+            raised_empty_batch = True
+        assert_true(raised_empty_batch)
+
+    @patch.object(socket, 'socket')
+    def test_send_batch(self, socket_mock):
+        notify_mock = Mock()
+        sender = apysdk._Sender('mockHost', 1234, 10, 'asd', 100, 100,
+                                notify_mock)
+        batch = ['{"event": 1}\n', '{"event": 2}\n']
+        # Assert send batch sends a stringified batch on the socket
+        sender._send_batch(batch)
+        assert_equals(sender._sock.send.call_args[0][0], ''.join(batch))
+
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    @patch.object(apysdk._Sender, '_connect')
+    @patch.object(apysdk._Sender, '_get_batch')
+    @patch.object(apysdk._Sender, '_send_batch')
+    @patch.object(apysdk._Sender, '_enqueue_batches')
+    @attr('slow')
+    def test_main_reenqueue_batches(self, enqueue_batches_mock, send_mock,
+                                    get_mock, connect_mock, start_thread_mock):
+        batch_num, event_num = 2, 5
+
+        def batches(*args):
+            for i in range(batch_num):
+                yield [{'batch': i, 'event': j} for j in range(event_num)]
+        get_mock.side_effect = batches()
+        notify_mock = Mock()
+        sender = apysdk._Sender('mockHost', 1234, 10, 'asd', 100, 100,
+                                notify_mock)
+        mock_err_msg = 'DC'
+        send_mock.side_effect = [True, socket.error(socket.errno.EPIPE,
+                                                    mock_err_msg)]
+
+        def connect_mock_side_effect():
+            sender._is_terminated.set()
+            raise exceptions.EmptyBatch()
+        connect_mock.side_effect = connect_mock_side_effect
+        sender._is_connected = threading.Event()
+        sender._is_connected.set()
+        sender._is_terminated = threading.Event()
+        sender._sender_main()
+        notify_mock.assert_called_once_with(
+                consts.LOG_DISCONNECTED,
+                consts.LOG_MSG_CONNECTION_LOST % mock_err_msg)
+        assert_equals(enqueue_batches_mock.call_count, 1)
+        assert_equals(len(enqueue_batches_mock.call_args), batch_num)
+
+
+
+
 
 
 
