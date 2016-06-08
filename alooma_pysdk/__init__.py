@@ -1,1 +1,1 @@
-from alooma_pysdk import PythonSDK
+from alooma_pysdk import PythonSDK, terminate

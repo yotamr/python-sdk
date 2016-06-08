@@ -12,7 +12,7 @@ setup(
   name = sdk_package_name,
   packages = [sdk_package_name],
   package_data = {sdk_package_name: ['alooma_ca']},
-  version = '0.1.0.1',
+  version = '0.1.1.2',
   description = 'A Python SDK to embed in your Python app to send events to your Alooma server',
   url = 'https://github.com/Aloomaio/python-sdk',
   author = 'Yuval Barth',
