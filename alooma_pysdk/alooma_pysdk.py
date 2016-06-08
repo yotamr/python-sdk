@@ -4,17 +4,16 @@
 import Queue
 import datetime
 import decimal
-import errno
 import inspect
 import json
 import logging
-import os
 import random
-import socket
-import ssl
 import threading
 import time
 import uuid
+
+import requests
+
 import consts
 import pysdk_exceptions as exceptions
 
@@ -88,10 +87,8 @@ class PythonSDK:
     """
 
     def __init__(self, token, servers=consts.DEFAULT_ALOOMA_ENDPOINT,
-                 port=consts.DEFAULT_ALOOMA_PORT,
-                 input_label=consts.DEFAULT_INPUT_LABEL,
-                 event_type=None, ssl_ca=consts.DEFAULT_CA,
-                 callback=None, buffer_size=consts.DEFAULT_BUFFER_SIZE,
+                 event_type=None, callback=None,
+                 buffer_size=consts.DEFAULT_BUFFER_SIZE,
                  blocking=True, batch_size=consts.DEFAULT_BATCH_SIZE,
                  batch_interval=consts.DEFAULT_BATCH_INTERVAL):
         """
@@ -102,11 +99,6 @@ class PythonSDK:
         :param servers:        (Optional) A string representing your Alooma
                                server DNS or IP address, or a list of such
                                strings. Usually unnecessary.
-        :param port:           (Optional) The destination port (default is 5001)
-        :param ssl_ca:         (Optional) The path to a CA file validating the
-                               server certificate. Default is a provided CA file
-                               for Alooma. If None is passed, a plaintext
-                               connection will be created.
         :param callback:       (Optional) a custom callback function to be
                                called whenever a logged event occurs
         :param buffer_size:    Optionally specify the buffer size to store
@@ -121,8 +113,6 @@ class PythonSDK:
                                and instead discards events when the buffer is
                                full. Default is True - blocks until buffer space
                                frees up.
-        :param input_label:    (Optional) The name that will be assigned to this
-                               input in the Alooma UI (default is 'Python SDK')
         :param event_type:     (Optional) The event type to be shown in the
                                UI for events originating from this PySDK. Can
                                also be a callable that receives the event as a
@@ -144,11 +134,6 @@ class PythonSDK:
         errors = []
         if token is not None and not isinstance(token, basestring):
             errors.append("Invalid token. Must be a string")
-        if ssl_ca and (not isinstance(ssl_ca, basestring) or not os.access(
-                ssl_ca, os.R_OK | os.F_OK)):
-            errors.append("Invalid CA file: %s" % ssl_ca)
-        if not isinstance(port, int):
-            errors.append("Invalid port number: %s" % port)
         if not isinstance(buffer_size, int) or buffer_size < 0:
             errors.append("Invalid buffer size: %s" % buffer_size)
         if not callable(self._callback):
@@ -158,8 +143,6 @@ class PythonSDK:
                                                                       list):
             errors.append('Invalid server list: must be a list of servers or a '
                           'str or unicode type representing one server')
-        if not isinstance(input_label, basestring):
-            errors.append('Invalid input_label. Must be a string')
         if event_type and not isinstance(event_type, basestring) \
                 and not callable(event_type):
             errors.append('Invalid event_type. Must be either a string or a '
@@ -181,11 +164,10 @@ class PythonSDK:
 
         # Get a Sender to get events from the queue and send them.
         # Sender is a Singleton per parameter group
-        sender_params = (servers, port, buffer_size, ssl_ca,
-                         batch_interval, batch_size)
+        sender_params = (servers, token, buffer_size, batch_interval,
+                         batch_size)
         self._sender = _get_sender(*sender_params, notify_func=self._notify)
 
-        self.input_label = input_label
         self.token = token
 
         if callable(event_type):
@@ -193,9 +175,56 @@ class PythonSDK:
             self._get_event_type = event_type
         else:
             # Use a function that returns the given string
-            if not event_type:
-                event_type = input_label
             self._get_event_type = lambda x: event_type
+
+    def _format_event(self, orig_event, external_metadata=None):
+        """
+        Format the event to the expected Alooma format, packing it into a
+        message field and adding metadata
+        :param orig_event:         The original event that was sent, should be
+                                   dict, str or unicode.
+        :param external_metadata:  (Optional) a dict containing metadata to add
+                                   to the event
+        :return:                   a dict with the original event in a 'message'
+                                   field and all the supplied metadata
+        """
+        event_wrapper = {}
+
+        # Add ISO6801 timestamp and frame info
+        timestamp = datetime.datetime.utcnow().isoformat()
+        event_wrapper[consts.WRAPPER_REPORT_TIME] = timestamp
+
+        # Add the enclosing frame
+        frame = inspect.currentframe().f_back.f_back
+        filename = frame.f_code.co_filename
+        line_number = frame.f_lineno
+        event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
+        event_wrapper[consts.WRAPPER_CALLING_LINE] = str(line_number)
+
+        # Add the UUID to the event
+        event_wrapper[consts.WRAPPER_UUID] = str(uuid.uuid4())
+
+        # Try to set event type. If it throws, put the input label
+        try:
+            event_wrapper[consts.WRAPPER_EVENT_TYPE] = \
+                self._get_event_type(orig_event)
+        except Exception:
+            pass  # The event type will be the input name, added by Alooma
+
+        # Optionally add external metadata
+        if external_metadata and isinstance(external_metadata, dict):
+            event_wrapper.update(external_metadata)
+
+        # JSON encoding and wrapping
+        event = _json_enc.encode(orig_event)
+        event_wrapper[consts.WRAPPER_MESSAGE] = event
+        event_wrapper = _json_enc.encode(event_wrapper)
+
+        # Ensure JSON is newline-terminated
+        if event_wrapper[-1] != '\n':
+            event_wrapper += '\n'
+
+        return event_wrapper
 
     def report(self, event, metadata=None, block=None):
         """
@@ -245,56 +274,6 @@ class PythonSDK:
                 failed_list.append((index, event))
         return failed_list
 
-    def _format_event(self, orig_event, external_metadata=None):
-        """
-        Format the event to the expected Alooma format, packing it into a
-        message field and adding metadata
-        :param orig_event:         The original event that was sent, should be
-                                   dict, str or unicode.
-        :param external_metadata:  (Optional) a dict containing metadata to add
-                                   to the event
-        :return:                   a dict with the original event in a 'message'
-                                   field and all the supplied metadata
-        """
-        event_wrapper = {}
-
-        # Add ISO6801 timestamp and frame info
-        timestamp = datetime.datetime.utcnow().isoformat()
-        event_wrapper[consts.WRAPPER_REPORT_TIME] = timestamp
-
-        # Add the enclosing frame
-        frame = inspect.currentframe().f_back.f_back
-        filename = frame.f_code.co_filename
-        line_number = frame.f_lineno
-        event_wrapper[consts.WRAPPER_CALLING_FILE] = str(filename)
-        event_wrapper[consts.WRAPPER_CALLING_LINE] = str(line_number)
-        event_wrapper[consts.WRAPPER_INPUT_TYPE] = consts.INPUT_TYPE
-        event_wrapper[consts.WRAPPER_INPUT_LABEL] = self.input_label
-        event_wrapper[consts.WRAPPER_TOKEN] = self.token
-        event_wrapper[consts.WRAPPER_UUID] = str(uuid.uuid4())
-
-        # Try to set event type. If it throws, put the input label
-        try:
-            event_wrapper[consts.WRAPPER_EVENT_TYPE] = \
-                self._get_event_type(orig_event)
-        except Exception:
-            event_wrapper[consts.WRAPPER_EVENT_TYPE] = self.input_label
-
-        # Optionally add external metadata
-        if external_metadata and isinstance(external_metadata, dict):
-            event_wrapper.update(external_metadata)
-
-        # JSON encoding and wrapping
-        event = _json_enc.encode(orig_event)
-        event_wrapper[consts.WRAPPER_MESSAGE] = event
-        event_wrapper = _json_enc.encode(event_wrapper)
-
-        # Ensure JSON is newline-terminated
-        if event_wrapper[-1] != '\n':
-            event_wrapper += '\n'
-
-        return event_wrapper
-
     def _notify(self, msg_type, message):
         """
         Calls the callback function and logs messages using the PySDK logger
@@ -339,20 +318,24 @@ class _Sender:
     to the server via an SSL-Secure socket.
     """
 
-    def __init__(self, hosts, port, buffer_size, ssl_ca, batch_interval,
-                 batch_size, notify):
+    def __init__(self, hosts, token, buffer_size, batch_interval, batch_size,
+                 notify):
 
         # This is a concurrent FIFO queue
         self._event_queue = Queue.Queue(buffer_size)
+
+        # The session on which requests will be sent
+        self._session = requests.Session()
 
         # Set connection vars
         if isinstance(hosts, str) or isinstance(hosts, unicode):
             hosts = hosts.strip().split(',')
         self._hosts = hosts
-        self._tcp_host = None
+        self._http_host = None
+        self._token = token
+        self._rest_url = None
         # Set all socket vars except host, which is selected when
         # connecting
-        self._set_socket_vars(port, ssl_ca)
         self._notified_buffer_full = False
 
         # Set vars
@@ -373,83 +356,36 @@ class _Sender:
                  connect
         """
         if len(self._hosts) == 1:
-            self._tcp_host = self._hosts[0]
+            self._http_host = self._hosts[0]
         else:
-            if self._tcp_host is None:
-                self._tcp_host = random.choice(self._hosts)
+            if self._http_host is not None:
+                self._http_host = random.choice(self._hosts)
             else:
                 hosts = list(self._hosts)
-                hosts.remove(self._tcp_host)
-                self._tcp_host = random.choice(hosts)
+                hosts.remove(self._http_host)
+                self._http_host = random.choice(hosts)
                 self._notify(consts.LOG_CONNECTING,
-                             consts.LOG_MSG_NEW_SERVER % self._tcp_host)
+                             consts.LOG_MSG_NEW_SERVER % self._http_host)
+        self._connection_validation_url = \
+            consts.CONN_VALIDATION_URL_TEMPLATE.format(host=self._http_host)
+        self._rest_url = consts.REST_URL_TEMPLATE.format(host=self._http_host,
+                                                         token=self._token)
 
-    def _set_socket_vars(self, port, ssl_ca):
+    def _verify_connection(self):
         """
-        Sets all the network variables for the Sender except the host
+        Checks availability of the Alooma server
+        :return: True if the server is reachable, else False
         """
-        self._sock = None
-        self._tcp_port = port
+        try:
+            res = self._session.get(self._connection_validation_url, json={})
+            if not res.ok:
+                raise requests.exceptions.RequestException(res.content)
+            return True
 
-        if ssl_ca:
-            self._tcp_ssl_req_cert = ssl.CERT_REQUIRED
-            self._tcp_ssl_ca = ssl_ca
-        else:
-            self._tcp_ssl_req_cert = ssl.CERT_NONE
-            self._tcp_ssl_ca = None
-
-    def _connect(self):
-        """
-        Connects the Sender to the chosen Alooma server
-        :return: Once connected, returns True
-        """
-        num_of_tries = -1
-        while not self._is_terminated.isSet():
-            if num_of_tries == 20:
-                err_msg = 'Failed to connect to "%s" after %d tries' % (
-                    self._hosts, num_of_tries)
-                raise exceptions.NotConnectedError(err_msg)
-
-            if num_of_tries == 0:
-                self._notify(consts.LOG_CONNECTING,
-                             "Connecting to the Alooma server")
-            elif num_of_tries > 0:
-                self._notify(
-                        consts.LOG_CONNECTING,
-                        "Retrying connection, attempt %d" % (num_of_tries + 1))
-
-            if self._sock is not None:
-                self._sock.close()
-                self._sock = None
-            try:
-                self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self._choose_host()
-
-                # Check if need SSL, if so - set up SSL.
-                if self._tcp_ssl_req_cert:
-                    self._notify(consts.LOG_SSL_WRAP, "SSL wrapping the socket")
-                    self._sock = ssl.wrap_socket(
-                            self._sock,
-                            cert_reqs=self._tcp_ssl_req_cert,
-                            ca_certs=self._tcp_ssl_ca)
-
-                self._sock.connect((self._tcp_host, int(self._tcp_port)))
-
-            # Trap socket connection Exceptions.
-            except Exception as e:
-                if self._is_terminated.isSet():  # Closed on purpose, terminate
-                    raise
-                error_message = ("Exception caught in socket connection: "
-                                 "%s" % str(e))
-                self._notify(consts.LOG_DISCONNECTED, error_message)
-                num_of_tries += 1
-                time.sleep(num_of_tries)
-
-            else:  # Successfully established a connection.
-                message = "Established connection to the server"
-                self._notify(consts.LOG_CONNECTED, message)
-                self._is_connected.set()
-                return True  # The connection was successful
+        except requests.exceptions.RequestException as ex:
+            msg = consts.LOG_MSG_CONNECTION_FAILED % str(ex)
+            self._notify(consts.LOG_CANT_CONNECT, msg)
+            raise exceptions.ConnectionFailed(msg)
 
     def _start_sender_thread(self):
         """Start the sender thread to initiate messaging."""
@@ -466,17 +402,20 @@ class _Sender:
         :param batches: a list of batches, each of which is a list of events
         """
         for batch in batches:
-            print batch
             for event in batch:
                 self.enqueue_event(event, False)
                 # TODO: Handle this, it shouldn't fail when buffer is full 
 
     def _send_batch(self, batch):
         """
-        Sends a batch to the destination server via the socket
+        Sends a batch to the destination server via HTTP REST API
         """
-        batch_string = ''.join(batch)
-        self._sock.send(batch_string)
+        try:
+            res = self._session.post(self._rest_url, json=batch)
+            if not res.ok:
+                raise exceptions.SendFailed("Got bad response code: %s" % res.status_code)
+        except requests.exceptions.RequestException as ex:
+            raise exceptions.SendFailed(str(ex))
 
     def _is_batch_time_over(self, last_batch_time):
         batch_time = (datetime.datetime.utcnow() - last_batch_time)
@@ -509,34 +448,34 @@ class _Sender:
         server. Events are sent every <self._batch_interval> seconds or whenever
         batch size reaches <self._batch_size>
         """
+        self._choose_host()
         last_batch_time = datetime.datetime.utcnow()
-        former_batch = batch = None
+        batch = None
 
         while not (self._is_terminated.isSet() and self._event_queue.empty()):
             try:
                 if not self._is_connected.isSet():
-                    self._connect()
+                    self._verify_connection()
 
                 batch = self._get_batch(last_batch_time)
                 self._send_batch(batch)
-                former_batch = batch
+
+            except exceptions.ConnectionFailed:  # Failed to connect to server
+                time.sleep(consts.NO_CONNECTION_SLEEP_TIME)
+                self._is_connected.clear()
 
             except exceptions.EmptyBatch:  # No events in queue, go to sleep
                 time.sleep(consts.EMPTY_BATCH_SLEEP_TIME)
 
-            except Exception as ex:
-                if isinstance(ex, socket.error):
-                    if isinstance(ex.args, tuple):
-                        if ex[0] == errno.EPIPE:
-                            error_message = \
-                                consts.LOG_MSG_CONNECTION_LOST % ex.strerror
-                            self._notify(consts.LOG_DISCONNECTED, error_message)
-                    self._is_connected.clear()
-                else:
-                    self._notify(consts.LOG_FAILED_SEND, str(ex))
+            except exceptions.SendFailed as ex:  # Failed to send an event batch
+                self._notify(consts.LOG_FAILED_SEND, ex.message)
+                self._is_connected.clear()
 
-                # Re-enqueue the former batch and if already pulled, this batch
-                self._enqueue_batches(*[b for b in [former_batch, batch] if b])
+                if batch:  # Failed after pulling a batch from the queue
+                    self._enqueue_batches(batch)
+
+            else:  # We sent a batch successfully, server is reachable
+                self._is_connected.set()
 
             finally:  # Advance last batch time
                 last_batch_time = datetime.datetime.utcnow()
@@ -570,16 +509,10 @@ class _Sender:
 
     def close(self):
         """
-        Closes the socket used to send data to Alooma
+        Marks Sender as terminated, flushes the queue and closes the session
         """
         self._is_terminated.set()
-        flushed = self.__flush()
-        if self._sock:
-            self._sock.close()
-            self._is_connected.set()
-        self._notify(consts.LOG_TERMINATED,
-                     'Terminated the connection to %s after flushing %d '
-                     'events' % (self._hosts, flushed))
+        self.__flush_and_close_session()
 
     def __dequeue_event(self, block=True, timeout=1):
         """
@@ -589,11 +522,14 @@ class _Sender:
         event = self._event_queue.get(block, timeout)
         return event
 
-    def __flush(self):
-        q_size = self._event_queue.qsize()
+    def __flush_and_close_session(self):
+        queue_size_before_flush = self._event_queue.qsize()
         while not self._event_queue.empty():
             time.sleep(0.5)
-        return q_size
+        self._session.close()
+        self._notify(consts.LOG_TERMINATED,
+                     'Terminated the connection to %s after flushing %d '
+                     'events' % (self._hosts, queue_size_before_flush))
 
     @property
     def servers(self):

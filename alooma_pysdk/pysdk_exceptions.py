@@ -2,5 +2,9 @@ class EmptyBatch(Exception):
     pass
 
 
-class NotConnectedError(Exception):
+class SendFailed(Exception):
+    pass
+
+
+class ConnectionFailed(Exception):
     pass
