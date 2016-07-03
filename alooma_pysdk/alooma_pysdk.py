@@ -89,7 +89,7 @@ class PythonSDK:
     def __init__(self, token, servers=consts.DEFAULT_ALOOMA_ENDPOINT,
                  event_type=None, callback=None,
                  buffer_size=consts.DEFAULT_BUFFER_SIZE,
-                 blocking=True, batch_size=consts.DEFAULT_BATCH_SIZE,
+                 blocking=False, batch_size=consts.DEFAULT_BATCH_SIZE,
                  batch_interval=consts.DEFAULT_BATCH_INTERVAL):
         """
         Initializes the Alooma Python SDK, creating a connection to
@@ -215,14 +215,8 @@ class PythonSDK:
         if external_metadata and isinstance(external_metadata, dict):
             event_wrapper.update(external_metadata)
 
-        # JSON encoding and wrapping
-        event = _json_enc.encode(orig_event)
-        event_wrapper[consts.WRAPPER_MESSAGE] = event
-        event_wrapper = _json_enc.encode(event_wrapper)
-
-        # Ensure JSON is newline-terminated
-        if event_wrapper[-1] != '\n':
-            event_wrapper += '\n'
+        # Wrap the event with metadata
+        event_wrapper[consts.WRAPPER_MESSAGE] = orig_event
 
         return event_wrapper
 
@@ -374,12 +368,14 @@ class _Sender:
     def _verify_connection(self):
         """
         Checks availability of the Alooma server
-        :return: True if the server is reachable, else False
+        :return: If the server is reachable, returns True
+        :raises: If connection fails, raises exceptions.ConnectionFailed
         """
         try:
             res = self._session.get(self._connection_validation_url, json={})
             if not res.ok:
                 raise requests.exceptions.RequestException(res.content)
+            self._is_connected.set()
             return True
 
         except requests.exceptions.RequestException as ex:
@@ -411,9 +407,12 @@ class _Sender:
         Sends a batch to the destination server via HTTP REST API
         """
         try:
-            res = self._session.post(self._rest_url, json=batch)
+            json_batch = _json_enc.encode(batch)
+            res = self._session.post(self._rest_url, data=json_batch,
+                                     headers=consts.CONTENT_TYPE_JSON)
             if not res.ok:
-                raise exceptions.SendFailed("Got bad response code: %s" % res.status_code)
+                raise exceptions.SendFailed("Got bad response code - %s: %s" % (
+                    res.status_code, res.content if res.content else 'No info'))
         except requests.exceptions.RequestException as ex:
             raise exceptions.SendFailed(str(ex))
 

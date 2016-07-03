@@ -22,6 +22,7 @@ EMPTY_BATCH_SLEEP_TIME = 2  # Seconds
 NO_CONNECTION_SLEEP_TIME = 2  # Seconds
 REST_URL_TEMPLATE = 'https://{host}/pysdk/{token}'
 CONN_VALIDATION_URL_TEMPLATE = 'https://{host}/'
+CONTENT_TYPE_JSON = {'Content-Type': 'application/json'}
 
 # Defaults
 DEFAULT_BATCH_INTERVAL = 5  # Seconds
