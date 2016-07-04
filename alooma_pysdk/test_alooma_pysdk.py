@@ -40,7 +40,6 @@ class TestPythonSDK(TestCase):
                                      consts.DEFAULT_BATCH_INTERVAL,
                                      consts.DEFAULT_BATCH_SIZE)),
                       (passed_to_sender[1].values()[0], passed_to_sender[0]))
-        assert_equals(sdk._get_event_type({'something':'1'}), sdk.input_label)
 
         # Test and ensure event type setting works
         custom_et = 'custom'
@@ -87,37 +86,30 @@ class TestPythonSDK(TestCase):
 
     def test_format_event(self):
         # Dict event
-        input_label = 'testInputLabel'
         event_type = 'testType'
         event = {'test-message': 'howdy', 'type': event_type}
-        sdk = self._get_python_sdk(event_type=lambda e: e['type'],
-                                   input_label=input_label)
+        sdk = self._get_python_sdk(event_type=lambda e: e['type'])
         formatted = sdk._format_event(event)
-        assert_true(formatted.endswith('\n'))  # Assert appended "\n"
-        formatted_json = json.loads(formatted)
+        assert_true(isinstance(formatted, dict))  # Assert appended "\n"
         for field in ALL_WRAPPER_FIELDS:
-            assert_true(field in formatted_json)  # Assert all fields in wrapper
+            assert_true(field in formatted, field)  # Are all fields in wrapper?
         # Assert message is correctly inserted to wrapper
-        assert_equals(formatted_json[consts.WRAPPER_MESSAGE], json.dumps(event))
+        assert_equals(formatted[consts.WRAPPER_MESSAGE], event)
         # Assert event type is properly assigned - et field exists in event
-        assert_equals(event_type, formatted_json[consts.WRAPPER_EVENT_TYPE])
+        assert_equals(event_type, formatted[consts.WRAPPER_EVENT_TYPE])
         # Assert event type is properly assigned - et field isn't in the event
         formatted = sdk._format_event({'howdy': 'partner'})
-        formatted_json = json.loads(formatted)
-        assert_equals(input_label, formatted_json[consts.WRAPPER_EVENT_TYPE])
+        assert_false(consts.WRAPPER_EVENT_TYPE in formatted)
 
         # String event
         event = 'someStringEvent'
         custom_metadata_field, custom_metadata_value = 'key', 'val'
         formatted = sdk._format_event(
                 event, {custom_metadata_field: custom_metadata_value})
-        formatted_json = json.loads(formatted)
         # Assert message inserted properly
-        assert_equals('"' + unicode(event) + '"',
-                      formatted_json[consts.WRAPPER_MESSAGE])
+        assert_equals(event, formatted[consts.WRAPPER_MESSAGE])
         # Assert custom metadata was inserted
-        assert_equals(custom_metadata_value,
-                      formatted_json[custom_metadata_field])
+        assert_equals(custom_metadata_value, formatted[custom_metadata_field])
 
 
 class TestSender(TestCase):
@@ -193,9 +185,12 @@ class TestSender(TestCase):
     def test_send_batch(self, session_mock):
         notify_mock = Mock()
         sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, notify_mock)
-        batch = ['{"event": 1}\n', '{"event": 2}\n']
+        batch = [{"event": 1}, {"event": 2}]
+        stringified_batch = apysdk._json_enc.encode(batch)
         # Assert send batch sends a stringified batch
-        import ipdb
-        ipdb.set_trace()
         sender._send_batch(batch)
-        assert_equals(sender._session.post.call_args[0][0], ''.join(batch))
+        call_args = sender._session.post.call_args
+        assert_equals(call_args[0][0], sender._rest_url)
+        assert_equals(call_args[1]['data'], stringified_batch)
+        assert_equals(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
+
