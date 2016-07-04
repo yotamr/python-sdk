@@ -88,9 +88,9 @@ class PythonSDK:
 
     def __init__(self, token, servers=consts.DEFAULT_ALOOMA_ENDPOINT,
                  event_type=None, callback=None,
-                 buffer_size=consts.DEFAULT_BUFFER_SIZE,
-                 blocking=False, batch_size=consts.DEFAULT_BATCH_SIZE,
-                 batch_interval=consts.DEFAULT_BATCH_INTERVAL):
+                 buffer_size=consts.DEFAULT_BUFFER_SIZE, blocking=False,
+                 batch_interval=consts.DEFAULT_BATCH_INTERVAL,
+                 batch_size=consts.DEFAULT_BATCH_SIZE):
         """
         Initializes the Alooma Python SDK, creating a connection to
         the Alooma server
@@ -99,26 +99,26 @@ class PythonSDK:
         :param servers:        (Optional) A string representing your Alooma
                                server DNS or IP address, or a list of such
                                strings. Usually unnecessary.
-        :param callback:       (Optional) a custom callback function to be
-                               called whenever a logged event occurs
-        :param buffer_size:    Optionally specify the buffer size to store
-                               before flushing the buffer and sending all of
-                               its
-                               contents
-        :param batch_size:     (Optional) Determines the batch size in bytes.
-                               Default is 4096 bytes
-        :param batch_interval: (Optional) Determines the batch interval in
-                               seconds. Default is 5 seconds
-        :param blocking:       (Optional) If False, never blocks the main thread
-                               and instead discards events when the buffer is
-                               full. Default is True - blocks until buffer space
-                               frees up.
         :param event_type:     (Optional) The event type to be shown in the
                                UI for events originating from this PySDK. Can
                                also be a callable that receives the event as a
                                parameter and calculates the event type based on
                                the event itself, e.g. getting it from a field
                                in the event. Default is the <input_label>.
+        :param callback:       (Optional) a custom callback function to be
+                               called whenever a logged event occurs
+        :param buffer_size:    Optionally specify the buffer size to store
+                               before flushing the buffer and sending all of
+                               its
+                               contents
+        :param blocking:       (Optional) If False, never blocks the main thread
+                               and instead discards events when the buffer is
+                               full. Default is True - blocks until buffer space
+                               frees up.
+        :param batch_interval: (Optional) Determines the batch interval in
+                               seconds. Default is 5 seconds
+        :param batch_size:     (Optional) Determines the batch size in bytes.
+                               Default is 4096 bytes
         """
         _logger.debug('init. locals=%s' % locals())
 

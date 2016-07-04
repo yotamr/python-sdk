@@ -33,7 +33,6 @@ DEFAULT_BUFFER_SIZE = 100000  # Events
 # Wrapper fieldname consts
 WRAPPER_CALLING_FILE = 'calling_file'
 WRAPPER_CALLING_LINE = 'calling_line'
-WRAPPER_TOKEN = 'token'
 WRAPPER_UUID = '@uuid'
 WRAPPER_EVENT_TYPE = 'event_type'
 WRAPPER_MESSAGE = 'message'
