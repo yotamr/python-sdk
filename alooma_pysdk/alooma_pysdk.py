@@ -227,8 +227,10 @@ class PythonSDK:
         :param event:    A dict / string representing an event
         :param metadata: (Optional) A dict with extra metadata to be attached to
                          the event
-        :param block:    (Optional) Overrides the default SDK setting to block
-                         if the buffer is full
+        :param block:    (Optional) If True, the function will block the thread
+                         until the event buffer has space for the event.
+                         Overrides the global `block` setting set in the `init`.
+                         Defaults to False
         :return:         True if the event was successfully enqueued, else False
         """
         # Don't allow reporting if the underlying sender is terminated
@@ -241,8 +243,8 @@ class PythonSDK:
         if isinstance(event, (dict, basestring)):
             formatted_event = self._format_event(event, metadata)
 
-            return self._sender.enqueue_event(
-                    formatted_event, block if block else self.is_blocking)
+            should_block = block if block is not None else self.is_blocking
+            return self._sender.enqueue_event(formatted_event, should_block)
 
         else:  # Event is not a dict nor a string. Deny it.
             error_message = (consts.LOG_MSG_BAD_EVENT % (type(event), event))
@@ -256,8 +258,10 @@ class PythonSDK:
         :param event_list: A list of dicts / strings representing events
         :param metadata: (Optional) A dict with extra metadata to be attached to
                          the event
-        :param block:    (Optional) Overrides the default SDK setting to block
-                         if the buffer is full
+        :param block:    (Optional) If True, the function will block the thread
+                         until the event buffer has space for the event.
+                         Overrides the global `block` setting set in the `init`.
+                         Defaults to False
         :return:         A list with tuples, each containing a failed event
                          and its original index. An empty list means success
         """
@@ -349,17 +353,18 @@ class _Sender:
         :return: The selected host to which the Sender will attempt to
                  connect
         """
-        if len(self._hosts) == 1:
+        # If a host hasn't been chosen yet or there is only one host
+        if len(self._hosts) == 1 or self._http_host is None:
             self._http_host = self._hosts[0]
-        else:
-            if self._http_host is not None:
-                self._http_host = random.choice(self._hosts)
-            else:
-                hosts = list(self._hosts)
-                hosts.remove(self._http_host)
-                self._http_host = random.choice(hosts)
-                self._notify(consts.LOG_CONNECTING,
-                             consts.LOG_MSG_NEW_SERVER % self._http_host)
+        else:  # There is a list of hosts to choose from, pick a random one
+            choice = self._http_host
+            while choice == self._http_host:
+                choice = random.choice(self._hosts)
+            self._http_host = choice
+            self._notify(consts.LOG_CONNECTING,
+                         consts.LOG_MSG_NEW_SERVER % self._http_host)
+
+        # Set the validation and the REST URLs
         self._connection_validation_url = \
             consts.CONN_VALIDATION_URL_TEMPLATE.format(host=self._http_host)
         self._rest_url = consts.REST_URL_TEMPLATE.format(host=self._http_host,
@@ -390,17 +395,16 @@ class _Sender:
         self._sender_thread.daemon = True
         self._sender_thread.start()
 
-    def _enqueue_batches(self, *batches):
+    def _enqueue_batch(self, batch):
         """
-        Enqueues several batches, putting all events in the Sender buffer. Only
-        when a prior batch failed and needs to be resent along with the current
-        batch
-        :param batches: a list of batches, each of which is a list of events
+        Enqueues an entire batch, putting all events in the Sender buffer. Used
+        to re-enqueue a batch when we fail to send it, to make sure no events
+        are lost.
+        :param batch: a list of events
         """
-        for batch in batches:
-            for event in batch:
-                self.enqueue_event(event, False)
-                # TODO: Handle this, it shouldn't fail when buffer is full 
+        for event in batch:
+            self.enqueue_event(event, False)
+            # TODO: Handle this, it shouldn't fail when buffer is full
 
     def _send_batch(self, batch):
         """
@@ -471,7 +475,7 @@ class _Sender:
                 self._is_connected.clear()
 
                 if batch:  # Failed after pulling a batch from the queue
-                    self._enqueue_batches(batch)
+                    self._enqueue_batch(batch)
 
             else:  # We sent a batch successfully, server is reachable
                 self._is_connected.set()

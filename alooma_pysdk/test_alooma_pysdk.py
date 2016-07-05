@@ -5,7 +5,8 @@ from unittest import TestCase
 import requests
 from mock import patch, Mock
 from nose.plugins.attrib import attr
-from nose.tools import assert_equals, assert_true, assert_false
+from nose.tools import assert_equal, assert_true, assert_false, \
+    assert_is_none, assert_is_not_none, assert_not_equal, assert_in
 
 import alooma_pysdk as apysdk
 import consts
@@ -17,7 +18,6 @@ ALL_WRAPPER_FIELDS = [getattr(consts, f) for f in consts.__dict__
 
 
 class TestPythonSDK(TestCase):
-
     def _get_python_sdk(self, *args, **kwargs):
         self.sender_mock = Mock()
         self.get_sender_mock = Mock(return_value=self.sender_mock)
@@ -33,18 +33,18 @@ class TestPythonSDK(TestCase):
         test_token = 'some-token'
         sdk = self._get_python_sdk(test_token)
         passed_to_sender = self.get_sender_mock.call_args
-        assert_equals(test_token, sdk.token)
-        assert_equals((sdk._notify, (consts.DEFAULT_ALOOMA_ENDPOINT,
-                                     sdk.token,
-                                     consts.DEFAULT_BUFFER_SIZE,
-                                     consts.DEFAULT_BATCH_INTERVAL,
-                                     consts.DEFAULT_BATCH_SIZE)),
-                      (passed_to_sender[1].values()[0], passed_to_sender[0]))
+        assert_equal(test_token, sdk.token)
+        assert_equal((sdk._notify, (consts.DEFAULT_ALOOMA_ENDPOINT,
+                                    sdk.token,
+                                    consts.DEFAULT_BUFFER_SIZE,
+                                    consts.DEFAULT_BATCH_INTERVAL,
+                                    consts.DEFAULT_BATCH_SIZE)),
+                     (passed_to_sender[1].values()[0], passed_to_sender[0]))
 
         # Test and ensure event type setting works
         custom_et = 'custom'
         sdk = self._get_python_sdk(event_type=custom_et)
-        assert_equals(custom_et, sdk._get_event_type('blah'))
+        assert_equal(custom_et, sdk._get_event_type('blah'))
 
     @patch.object(apysdk.PythonSDK, '_format_event')
     def test_report(self, format_event_mock):
@@ -52,7 +52,7 @@ class TestPythonSDK(TestCase):
         sdk = self._get_python_sdk()
         self.sender_mock.is_terminated = True
         sdk._format_event.assert_not_called()
-        assert_equals(False, sdk.report('some-event'))
+        assert_equal(False, sdk.report('some-event'))
 
         # Test string and dict are accepted but nothing else
         self.sender_mock.is_terminated = False
@@ -60,16 +60,16 @@ class TestPythonSDK(TestCase):
         enqueue_event_call_count = self.sender_mock.enqueue_event.call_count
         for i in [{'dict': 'event'}, 'str_event', u'unicode_event']:
             assert_true(sdk.report(i))
-            assert_equals(format_event_mock.call_count, format_called_count + 1)
+            assert_equal(format_event_mock.call_count, format_called_count + 1)
             format_called_count = format_event_mock.call_count
-            assert_equals(self.sender_mock.enqueue_event.call_count,
-                          enqueue_event_call_count + 1)
+            assert_equal(self.sender_mock.enqueue_event.call_count,
+                         enqueue_event_call_count + 1)
             enqueue_event_call_count = self.sender_mock.enqueue_event.call_count
         for i in [1, 1.1, True]:
             assert_false(sdk.report(i))
-        assert_equals(format_event_mock.call_count, format_called_count)
-        assert_equals(enqueue_event_call_count,
-                      self.sender_mock.enqueue_event.call_count)
+        assert_equal(format_event_mock.call_count, format_called_count)
+        assert_equal(enqueue_event_call_count,
+                     self.sender_mock.enqueue_event.call_count)
 
     @patch.object(apysdk.PythonSDK, 'report')
     def test_report_many(self, report_mock):
@@ -81,7 +81,7 @@ class TestPythonSDK(TestCase):
         sdk = self._get_python_sdk()
         ret = sdk.report_many({'index': i} for i in range(len(report_results)))
         returned_bad_indexes = [x[0] for x in ret]
-        assert_equals(len(bad_indexes), len(ret))
+        assert_equal(len(bad_indexes), len(ret))
         assert_true(all([i in returned_bad_indexes for i in bad_indexes]))
 
     def test_format_event(self):
@@ -94,9 +94,9 @@ class TestPythonSDK(TestCase):
         for field in ALL_WRAPPER_FIELDS:
             assert_true(field in formatted, field)  # Are all fields in wrapper?
         # Assert message is correctly inserted to wrapper
-        assert_equals(formatted[consts.WRAPPER_MESSAGE], event)
+        assert_equal(formatted[consts.WRAPPER_MESSAGE], event)
         # Assert event type is properly assigned - et field exists in event
-        assert_equals(event_type, formatted[consts.WRAPPER_EVENT_TYPE])
+        assert_equal(event_type, formatted[consts.WRAPPER_EVENT_TYPE])
         # Assert event type is properly assigned - et field isn't in the event
         formatted = sdk._format_event({'howdy': 'partner'})
         assert_false(consts.WRAPPER_EVENT_TYPE in formatted)
@@ -105,11 +105,11 @@ class TestPythonSDK(TestCase):
         event = 'someStringEvent'
         custom_metadata_field, custom_metadata_value = 'key', 'val'
         formatted = sdk._format_event(
-                event, {custom_metadata_field: custom_metadata_value})
+            event, {custom_metadata_field: custom_metadata_value})
         # Assert message inserted properly
-        assert_equals(event, formatted[consts.WRAPPER_MESSAGE])
+        assert_equal(event, formatted[consts.WRAPPER_MESSAGE])
         # Assert custom metadata was inserted
-        assert_equals(custom_metadata_value, formatted[custom_metadata_field])
+        assert_equal(custom_metadata_value, formatted[custom_metadata_field])
 
 
 class TestSender(TestCase):
@@ -122,24 +122,60 @@ class TestSender(TestCase):
         some_event = {'event': 1}
         ret = sender.enqueue_event(some_event, False)
         assert_true(ret)
-        assert_equals(sender._event_queue.get_nowait(), some_event)
+        assert_equal(sender._event_queue.get_nowait(), some_event)
 
         # Test failing with notification when buffer is full
         sender.enqueue_event(some_event, False)
         assert_false(sender.enqueue_event(some_event, False))
-        assert_equals(notify_mock.call_args[0], (consts.LOG_BUFFER_FULL,
-                                                 consts.LOG_MSG_BUFFER_FULL))
+        assert_equal(notify_mock.call_args[0], (consts.LOG_BUFFER_FULL,
+                                                consts.LOG_MSG_BUFFER_FULL))
         assert_true(sender._notified_buffer_full)
 
         # Test recovering when buffer frees up
         sender._event_queue.get_nowait()
         assert_true(sender.enqueue_event(some_event, False))
-        assert_equals(notify_mock.call_args[0], (consts.LOG_BUFFER_FREED,
-                                                 consts.LOG_MSG_BUFFER_FREED))
+        assert_equal(notify_mock.call_args[0], (consts.LOG_BUFFER_FREED,
+                                                consts.LOG_MSG_BUFFER_FREED))
+
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    def test_choose_host(self, start_thread_mock):
+        notify_mock = Mock()
+        buffer_size = 1000
+
+        # Test when only one host exists and it's the first time
+        host = 'mockHost'
+        sender = apysdk._Sender(host, 1234, buffer_size, 100, 100,
+                                notify_mock)
+
+        assert_is_none(sender._http_host)
+        sender._choose_host()
+        assert_equal(host, sender._http_host)
+
+        # Make sure the host is picked again when called and not using random
+        sender._choose_host()
+        assert_equal(host, sender._http_host)
+
+        # Test when there are multiple hosts
+        hosts = ['1', '2', '3', '4', '5', '6']
+        sender = apysdk._Sender(hosts, 1234, buffer_size, 100, 100,
+                                notify_mock)
+        sender._choose_host()
+        assert_is_not_none(sender._http_host)
+
+        # Make sure the host is not rechosen upon a `_choose_host` call
+        for i in range(100):
+            before = sender._http_host
+            sender._choose_host()
+            after = sender._http_host
+            assert_not_equal(before, after)
+
+            # Make sure the new host is properly inserted into the URLs
+            assert_in(after, sender._rest_url)
+            assert_in(after, sender._connection_validation_url)
 
     @attr('slow')
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_get_batch_empy_queue_raises(self, start_thread_mock):
+    def test_get_batch_empty_queue_raises(self, start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
@@ -164,7 +200,7 @@ class TestSender(TestCase):
         # Populate the queue
         for i in range(buffer_size):
             sender._event_queue.put_nowait(
-                    json.dumps({'num': i, 'some_field': 'some_val'}))
+                json.dumps({'num': i, 'some_field': 'some_val'}))
 
         # Assert we comply with the max batch size (ignore last event)
         last_batch_time = datetime.datetime.utcnow()
@@ -173,7 +209,7 @@ class TestSender(TestCase):
 
         # Assert we comply with the max batch interval
         last_batch_time = datetime.datetime.utcnow() - datetime.timedelta(
-                seconds=sender._batch_max_interval)
+            seconds=sender._batch_max_interval)
         try:
             raised_empty_batch = False
             sender._get_batch(last_batch_time)
@@ -190,7 +226,6 @@ class TestSender(TestCase):
         # Assert send batch sends a stringified batch
         sender._send_batch(batch)
         call_args = sender._session.post.call_args
-        assert_equals(call_args[0][0], sender._rest_url)
-        assert_equals(call_args[1]['data'], stringified_batch)
-        assert_equals(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
-
+        assert_equal(call_args[0][0], sender._rest_url)
+        assert_equal(call_args[1]['data'], stringified_batch)
+        assert_equal(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
