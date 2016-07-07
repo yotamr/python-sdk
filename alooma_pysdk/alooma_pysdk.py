@@ -90,7 +90,7 @@ class PythonSDK:
                  event_type=None, callback=None,
                  buffer_size=consts.DEFAULT_BUFFER_SIZE, blocking=False,
                  batch_interval=consts.DEFAULT_BATCH_INTERVAL,
-                 batch_size=consts.DEFAULT_BATCH_SIZE):
+                 batch_size=consts.DEFAULT_BATCH_SIZE, *args, **kwargs):
         """
         Initializes the Alooma Python SDK, creating a connection to
         the Alooma server
@@ -121,6 +121,11 @@ class PythonSDK:
                                Default is 4096 bytes
         """
         _logger.debug('init. locals=%s' % locals())
+
+        if args or kwargs:
+            _logger.warning('The SDK received unrecognized arguments which '
+                            'will be ignored. args: %s, kwargs: %s', args,
+                            kwargs)
 
         # _callback is called for every info \ error event. The user can
         # set it via the param callback to get the event messages and send
@@ -229,8 +234,9 @@ class PythonSDK:
                          the event
         :param block:    (Optional) If True, the function will block the thread
                          until the event buffer has space for the event.
-                         Overrides the global `block` setting set in the `init`.
-                         Defaults to False
+                         If False, reported events are discarded if the queue is
+                         full. Defaults to None, which uses the global `block`
+                         parameter given in the `init`.
         :return:         True if the event was successfully enqueued, else False
         """
         # Don't allow reporting if the underlying sender is terminated
@@ -260,8 +266,9 @@ class PythonSDK:
                          the event
         :param block:    (Optional) If True, the function will block the thread
                          until the event buffer has space for the event.
-                         Overrides the global `block` setting set in the `init`.
-                         Defaults to False
+                         If False, reported events are discarded if the queue is
+                         full. Defaults to None, which uses the global `block`
+                         parameter given in the `init`.
         :return:         A list with tuples, each containing a failed event
                          and its original index. An empty list means success
         """
