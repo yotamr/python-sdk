@@ -2,11 +2,12 @@ import datetime
 import json
 from unittest import TestCase
 
+import decimal
 import requests
 from mock import patch, Mock
 from nose.plugins.attrib import attr
 from nose.tools import assert_equal, assert_true, assert_false, \
-    assert_is_none, assert_is_not_none, assert_not_equal, assert_in
+    assert_is_none, assert_is_not_none, assert_not_equal, assert_in, raises
 
 import alooma_pysdk as apysdk
 import consts
@@ -18,15 +19,39 @@ ALL_WRAPPER_FIELDS = [getattr(consts, f) for f in consts.__dict__
 
 
 class TestPythonSDK(TestCase):
-    def _get_python_sdk(self, *args, **kwargs):
+    def setUp(self):
         self.sender_mock = Mock()
         self.get_sender_mock = Mock(return_value=self.sender_mock)
+        self.__old_get_sender = apysdk._get_sender
         apysdk._get_sender = self.get_sender_mock
+
+    def _get_python_sdk(self, *args, **kwargs):
         if not args:
             args = list(args)
             args.append('some-token')
         sdk = apysdk.PythonSDK(*args, **kwargs)
         return sdk
+
+    def test_bad_param_types_raise(self):
+        args = (321, 231, 643, 140, '235', '346', '467', '588')
+        raised = False
+        try:
+            self._get_python_sdk(*args)
+        except ValueError as ex:
+            raised = True
+            for arg in args:
+                assert_in(str(arg), str(ex))
+
+        assert_true(raised)
+
+    @patch.object(apysdk, '_logger')
+    def test_exrga_args_log_warning(self, logger_mock):
+        extra_kwargs = {'some_kwarg': 'hello'}
+        self._get_python_sdk(**extra_kwargs)
+
+        # Assert the logger was called and that the extra kwarg was mentioned
+        assert_equal(logger_mock.warning.call_count, 1)
+        assert_in(extra_kwargs, logger_mock.warning.call_args[0])
 
     def test_init(self):
         # Test token and parameter defaults are used, event type = input label
@@ -111,6 +136,9 @@ class TestPythonSDK(TestCase):
         # Assert custom metadata was inserted
         assert_equal(custom_metadata_value, formatted[custom_metadata_field])
 
+    def tearDown(self):
+        apysdk._get_sender = self.__old_get_sender
+
 
 class TestSender(TestCase):
     @patch.object(apysdk._Sender, '_start_sender_thread')
@@ -173,6 +201,18 @@ class TestSender(TestCase):
             assert_in(after, sender._rest_url)
             assert_in(after, sender._connection_validation_url)
 
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    @patch.object(requests, 'Session')
+    @raises(exceptions.ConnectionFailed)
+    def test_verify_connection(self, session_mock, start_sender_mock):
+        # Assert the function throws the right exception when it fails
+        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd')
+        sender._notify = Mock()
+        sender._connection_validation_url = 'asd'
+        sender._session.get.return_value = Mock(ok=False)
+        sender._verify_connection()
+
+
     @attr('slow')
     @patch.object(apysdk._Sender, '_start_sender_thread')
     def test_get_batch_empty_queue_raises(self, start_thread_mock):
@@ -223,9 +263,60 @@ class TestSender(TestCase):
         sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, notify_mock)
         batch = [{"event": 1}, {"event": 2}]
         stringified_batch = apysdk._json_enc.encode(batch)
+
         # Assert send batch sends a stringified batch
         sender._send_batch(batch)
         call_args = sender._session.post.call_args
         assert_equal(call_args[0][0], sender._rest_url)
         assert_equal(call_args[1]['data'], stringified_batch)
         assert_equal(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
+
+        # Assert send fails with proper exception
+        sender._session.post.return_value = Mock(ok=False)
+
+        raised = False
+        try:
+            sender._send_batch(batch)
+        except exceptions.SendFailed:
+            raised = True
+
+        assert_true(raised)
+
+
+class TestAloomaEncoder(TestCase):
+    def test_convert_types(self):
+        # This test ensures all the types don't throw when converted
+        to_jsonify = {'datetime': datetime.datetime.utcnow(),
+                      'date': datetime.date.today(),
+                      'timedelta': datetime.timedelta(days=1),
+                      'decimal': decimal.Decimal(10),
+                      'int': 1, 'string': 'hello'}
+        encoder = apysdk.AloomaEncoder()
+        encoder.encode(to_jsonify)
+
+
+@patch.object(apysdk, '_Sender')
+def test_get_sender(sender_mock):
+    sender_params = ('param', 'another_param')
+    sender_params2 = ('param', 'a_different_param')
+    notify_kwargs = {'notify_func': 'notify'}
+
+    # Make sure same params retrieve the same sender
+    apysdk._get_sender(*sender_params, **notify_kwargs)
+    apysdk._get_sender(*sender_params, **notify_kwargs)
+    assert_equal(1, len(apysdk._sender_instances))
+
+    # Make sure different params retrieve a new sender
+    sender3 = apysdk._get_sender(*sender_params2, **notify_kwargs)
+    assert_equal(2, len(apysdk._sender_instances))
+
+
+def test_terminate():
+    targets = {'a': Mock(), 'b': Mock(), 'c': Mock()}
+    apysdk._sender_instances.update(targets)
+    apysdk.terminate()
+
+    for sender_mock in targets.values():
+        assert_equal(1, sender_mock.close.call_count)
+
+    assert_equal(0, len(apysdk._sender_instances))
