@@ -138,32 +138,32 @@ class PythonSDK:
         # Check inputs.
         errors = []
         if token is not None and not isinstance(token, basestring):
-            errors.append("Invalid token. Must be a string")
+            errors.append(consts.LOG_MSG_BAD_PARAM_TOKEN % token)
         if not isinstance(buffer_size, int) or buffer_size < 0:
-            errors.append("Invalid buffer size: %s" % buffer_size)
+            errors.append(consts.LOG_MSG_BAD_PARAM_BUFFER_SIZE % buffer_size)
         if not callable(self._callback):
-            errors.append("Invalid callback: %s is not callable" %
-                          str(type(self._callback)))
+            errors.append(consts.LOG_MSG_BAD_PARAM_CALLBACK %
+                          str(self._callback))
         if not isinstance(servers, (str, unicode)) and not isinstance(servers,
                                                                       list):
-            errors.append('Invalid server list: must be a list of servers or a '
-                          'str or unicode type representing one server')
+            errors.append(consts.LOG_MSG_BAD_PARAM_SERVERS % servers)
         if event_type and not isinstance(event_type, basestring) \
                 and not callable(event_type):
-            errors.append('Invalid event_type. Must be either a string or a '
-                          'callable. Instead given: %s' % type(event_type))
+            et_type = type(event_type)
+            errors.append(consts.LOG_MSG_BAD_PARAM_EVENT_TYPE % (event_type,
+                                                                 et_type))
         if not isinstance(batch_size, int):
-            errors.append("Invalid batch size, must be an int (in bytes)")
+            errors.append(consts.LOG_MSG_BAD_PARAM_BATCH_SIZE % batch_size)
         if not isinstance(batch_interval, (int, float)):
-            errors.append("Invalid batch interval, must be an int or a float"
-                          "(in seconds)")
+            errors.append(
+                consts.LOG_MSG_BAD_PARAM_BATCH_INTERVAL % batch_interval)
         if not isinstance(blocking, bool):
-            errors.append('Invalid blocking parameter, must be a boolean')
+            errors.append(consts.LOG_MSG_BAD_PARAM_BLOCKING % blocking)
         else:
             self.is_blocking = blocking
         if errors:
             errors.append('The PySDK will now terminate.')
-            error_message = "\n".join(errors)
+            error_message = "\n".join(['Bad parameters given:'] + errors)
             self._notify(consts.LOG_INIT_FAILED, error_message)
             raise ValueError(error_message)
 
@@ -285,7 +285,10 @@ class PythonSDK:
         """
         timestamp = datetime.datetime.utcnow()
         _logger.log(msg_type, str(message))
-        self._callback(msg_type, message, timestamp)
+        try:
+            self._callback(msg_type, message, timestamp)
+        except Exception as ex:
+            _logger.warning(consts.LOG_MSG_BAD_PARAM_CALLBACK % str(ex))
 
     @staticmethod
     def _default_callback(msg_type, message, timestamp):

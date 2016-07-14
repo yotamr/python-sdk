@@ -17,6 +17,22 @@ LOG_MSG_BAD_EVENT = 'Received an invalid event of type "%s", the event was ' \
 LOG_MSG_NEW_SERVER = 'Selected new server: "%s"'
 LOG_MSG_CONNECTION_FAILED = 'Failed to connect to the Alooma server: %s'
 
+LOG_MSG_BAD_PARAM_TOKEN = 'Invalid token (%s). Must be a string'
+LOG_MSG_BAD_PARAM_BUFFER_SIZE = 'Invalid buffer size: %s'
+LOG_MSG_BAD_PARAM_CALLBACK = 'Failure in callback function call: %s'
+LOG_MSG_BAD_PARAM_EVENT_TYPE = 'Invalid event_type (%s). Must be either a ' \
+                               'string or a callable. Instead given a %s'
+LOG_MSG_BAD_PARAM_BATCH_SIZE = 'Invalid batch size (%s), must be an int ' \
+                               '(in bytes)'
+LOG_MSG_BAD_PARAM_BATCH_INTERVAL = 'Invalid batch interval (%s), must be an ' \
+                                   'int or a float (in seconds)'
+LOG_MSG_BAD_PARAM_BLOCKING = 'Invalid blocking parameter (%s), must be a ' \
+                             'boolean'
+LOG_MSG_BAD_PARAM_CALLBACK = 'Invalid callback: %s is not callable'
+LOG_MSG_BAD_PARAM_SERVERS = 'Invalid server list (%s): must be a list of ' \
+                            'servers or a str or unicode type representing ' \
+                            'one server'
+
 # General constants
 EMPTY_BATCH_SLEEP_TIME = 2  # Seconds
 NO_CONNECTION_SLEEP_TIME = 2  # Seconds
