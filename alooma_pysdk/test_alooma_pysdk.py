@@ -7,7 +7,7 @@ import requests
 from mock import patch, Mock
 from nose.plugins.attrib import attr
 from nose.tools import assert_equal, assert_true, assert_false, \
-    assert_is_none, assert_is_not_none, assert_not_equal, assert_in
+    assert_is_none, assert_is_not_none, assert_not_equal, assert_in, raises
 
 import alooma_pysdk as apysdk
 import consts
@@ -203,19 +203,15 @@ class TestSender(TestCase):
 
     @patch.object(apysdk._Sender, '_start_sender_thread')
     @patch.object(requests, 'Session')
+    @raises(exceptions.ConnectionFailed)
     def test_verify_connection(self, session_mock, start_sender_mock):
         # Assert the function throws the right exception when it fails
         sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd')
         sender._notify = Mock()
         sender._connection_validation_url = 'asd'
         sender._session.get.return_value = Mock(ok=False)
-        raised = False
-        try:
-            sender._verify_connection()
-        except exceptions.ConnectionFailed:
-            raised = True
+        sender._verify_connection()
 
-        assert_true(raised)
 
     @attr('slow')
     @patch.object(apysdk._Sender, '_start_sender_thread')
@@ -289,17 +285,14 @@ class TestSender(TestCase):
 
 class TestAloomaEncoder(TestCase):
     def test_convert_types(self):
-        try:
-            # This test ensures all the types don't throw when converted
-            to_jsonify = {'datetime': datetime.datetime.utcnow(),
-                          'date': datetime.date.today(),
-                          'timedelta': datetime.timedelta(days=1),
-                          'decimal': decimal.Decimal(10),
-                          'int': 1, 'string': 'hello'}
-            encoder = apysdk.AloomaEncoder()
-            encoder.encode(to_jsonify)
-        except Exception as ex:
-            self.fail('Failed due to exception: %s' % str(ex))
+        # This test ensures all the types don't throw when converted
+        to_jsonify = {'datetime': datetime.datetime.utcnow(),
+                      'date': datetime.date.today(),
+                      'timedelta': datetime.timedelta(days=1),
+                      'decimal': decimal.Decimal(10),
+                      'int': 1, 'string': 'hello'}
+        encoder = apysdk.AloomaEncoder()
+        encoder.encode(to_jsonify)
 
 
 @patch.object(apysdk, '_Sender')
