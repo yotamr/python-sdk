@@ -44,7 +44,6 @@ class TestPythonSDK(TestCase):
 
         assert_true(raised)
 
-
     @patch.object(apysdk, '_logger')
     def test_exrga_args_log_warning(self, logger_mock):
         extra_kwargs = {'some_kwarg': 'hello'}
@@ -202,6 +201,22 @@ class TestSender(TestCase):
             assert_in(after, sender._rest_url)
             assert_in(after, sender._connection_validation_url)
 
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    @patch.object(requests, 'Session')
+    def test_verify_connection(self, session_mock, start_sender_mock):
+        # Assert the function throws the right exception when it fails
+        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd')
+        sender._notify = Mock()
+        sender._connection_validation_url = 'asd'
+        sender._session.get.return_value = Mock(ok=False)
+        raised = False
+        try:
+            sender._verify_connection()
+        except exceptions.ConnectionFailed:
+            raised = True
+
+        assert_true(raised)
+
     @attr('slow')
     @patch.object(apysdk._Sender, '_start_sender_thread')
     def test_get_batch_empty_queue_raises(self, start_thread_mock):
@@ -252,6 +267,7 @@ class TestSender(TestCase):
         sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, notify_mock)
         batch = [{"event": 1}, {"event": 2}]
         stringified_batch = apysdk._json_enc.encode(batch)
+
         # Assert send batch sends a stringified batch
         sender._send_batch(batch)
         call_args = sender._session.post.call_args
@@ -259,18 +275,29 @@ class TestSender(TestCase):
         assert_equal(call_args[1]['data'], stringified_batch)
         assert_equal(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
 
+        # Assert send fails with proper exception
+        sender._session.post.return_value = Mock(ok=False)
+
+        raised = False
+        try:
+            sender._send_batch(batch)
+        except exceptions.SendFailed:
+            raised = True
+
+        assert_true(raised)
+
 
 class TestAloomaEncoder(TestCase):
-    def test_convert_datetime(self):
+    def test_convert_types(self):
         try:
             # This test ensures all the types don't throw when converted
-            objects_to_jsonify = [datetime.datetime.utcnow(),
-                                datetime.date.today(),
-                                datetime.timedelta(days=1),
-                                decimal.Decimal(10)]
+            to_jsonify = {'datetime': datetime.datetime.utcnow(),
+                          'date': datetime.date.today(),
+                          'timedelta': datetime.timedelta(days=1),
+                          'decimal': decimal.Decimal(10),
+                          'int': 1, 'string': 'hello'}
             encoder = apysdk.AloomaEncoder()
-            for obj in objects_to_jsonify:
-                encoder.default(obj)
+            encoder.encode(to_jsonify)
         except Exception as ex:
             self.fail('Failed due to exception: %s' % str(ex))
 
