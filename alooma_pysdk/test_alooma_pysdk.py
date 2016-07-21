@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 from unittest import TestCase
 
 import decimal
@@ -63,7 +64,7 @@ class TestPythonSDK(TestCase):
                                     sdk.token,
                                     consts.DEFAULT_BUFFER_SIZE,
                                     consts.DEFAULT_BATCH_INTERVAL,
-                                    consts.DEFAULT_BATCH_SIZE)),
+                                    consts.DEFAULT_BATCH_SIZE, True)),
                      (passed_to_sender[1].values()[0], passed_to_sender[0]))
 
         # Test and ensure event type setting works
@@ -146,7 +147,7 @@ class TestSender(TestCase):
         # Test that event is enqueued properly
         notify_mock = Mock()
         sender = apysdk._Sender('mockHost', 1234, 1, 10, 10,
-                                notify_mock)
+                                True, notify_mock)
         some_event = {'event': 1}
         ret = sender.enqueue_event(some_event, False)
         assert_true(ret)
@@ -155,14 +156,14 @@ class TestSender(TestCase):
         # Test failing with notification when buffer is full
         sender.enqueue_event(some_event, False)
         assert_false(sender.enqueue_event(some_event, False))
-        assert_equal(notify_mock.call_args[0], (consts.LOG_BUFFER_FULL,
+        assert_equal(notify_mock.call_args[0], (logging.WARNING,
                                                 consts.LOG_MSG_BUFFER_FULL))
         assert_true(sender._notified_buffer_full)
 
         # Test recovering when buffer frees up
         sender._event_queue.get_nowait()
         assert_true(sender.enqueue_event(some_event, False))
-        assert_equal(notify_mock.call_args[0], (consts.LOG_BUFFER_FREED,
+        assert_equal(notify_mock.call_args[0], (logging.WARNING,
                                                 consts.LOG_MSG_BUFFER_FREED))
 
     @patch.object(apysdk._Sender, '_start_sender_thread')
@@ -173,7 +174,7 @@ class TestSender(TestCase):
         # Test when only one host exists and it's the first time
         host = 'mockHost'
         sender = apysdk._Sender(host, 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
 
         assert_is_none(sender._http_host)
         sender._choose_host()
@@ -186,7 +187,7 @@ class TestSender(TestCase):
         # Test when there are multiple hosts
         hosts = ['1', '2', '3', '4', '5', '6']
         sender = apysdk._Sender(hosts, 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
         sender._choose_host()
         assert_is_not_none(sender._http_host)
 
@@ -206,7 +207,7 @@ class TestSender(TestCase):
     @raises(exceptions.ConnectionFailed)
     def test_verify_connection(self, session_mock, start_sender_mock):
         # Assert the function throws the right exception when it fails
-        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd')
+        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd', True)
         sender._notify = Mock()
         sender._connection_validation_url = 'asd'
         sender._session.get.return_value = Mock(ok=False)
@@ -219,7 +220,7 @@ class TestSender(TestCase):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
 
         # Assert empty queue raises EmptyBatch
         last_batch_time = datetime.datetime.utcnow()
@@ -235,7 +236,7 @@ class TestSender(TestCase):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
 
         # Populate the queue
         for i in range(buffer_size):
@@ -260,15 +261,16 @@ class TestSender(TestCase):
     @patch.object(requests, 'Session')
     def test_send_batch(self, session_mock):
         notify_mock = Mock()
-        sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, notify_mock)
-        batch = [{"event": 1}, {"event": 2}]
-        stringified_batch = apysdk._json_enc.encode(batch)
+        sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, True,
+                                notify_mock)
+        encode = apysdk._json_enc.encode
+        batch = [encode({"event": 1}), encode({"event": 2})]
 
         # Assert send batch sends a stringified batch
         sender._send_batch(batch)
         call_args = sender._session.post.call_args
         assert_equal(call_args[0][0], sender._rest_url)
-        assert_equal(call_args[1]['data'], stringified_batch)
+        assert_equal(call_args[1]['data'], '[' + ','.join(batch) + ']')
         assert_equal(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
 
         # Assert send fails with proper exception

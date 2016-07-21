@@ -1,11 +1,5 @@
 import logging
 
-# Explicit enum for logging message types
-LOG_SSL_WRAP = LOG_CONNECTING = LOG_EXIT_FLUSH = logging.DEBUG
-LOG_TERMINATED = LOG_CONNECTED = LOG_BUFFER_FREED = logging.INFO
-LOG_CANT_CONNECT = LOG_FAILED_SEND = LOG_BUFFER_FULL = logging.ERROR
-LOG_INIT_FAILED = logging.CRITICAL
-
 # Log messages
 LOG_MSG_BUFFER_FULL = 'The buffer is full. Events will be discarded until ' \
                       'buffer space is freed'
@@ -16,10 +10,10 @@ LOG_MSG_BAD_EVENT = 'Received an invalid event of type "%s", the event was ' \
                     'discarded. Original event  = "%s"'
 LOG_MSG_NEW_SERVER = 'Selected new server: "%s"'
 LOG_MSG_CONNECTION_FAILED = 'Failed to connect to the Alooma server: %s'
+LOG_MSG_CALLBACK_FAILURE = 'Failure in callback function call: %s'
 
 LOG_MSG_BAD_PARAM_TOKEN = 'Invalid token (%s). Must be a string'
 LOG_MSG_BAD_PARAM_BUFFER_SIZE = 'Invalid buffer size: %s'
-LOG_MSG_BAD_PARAM_CALLBACK = 'Failure in callback function call: %s'
 LOG_MSG_BAD_PARAM_EVENT_TYPE = 'Invalid event_type (%s). Must be either a ' \
                                'string or a callable. Instead given a %s'
 LOG_MSG_BAD_PARAM_BATCH_SIZE = 'Invalid batch size (%s), must be an int ' \
@@ -33,16 +27,23 @@ LOG_MSG_BAD_PARAM_SERVERS = 'Invalid server list (%s): must be a list of ' \
                             'servers or a str or unicode type representing ' \
                             'one server'
 
+# Debug messages
+LOG_MSG_SENDING_BATCH = 'Sending a batch of %d events (bytesize: %d) to URL: %s'
+LOG_MSG_VERIFYING_CONNECTION = 'Sent connection verification to URL: %s. ' \
+                               'Result: %s'
+LOG_MSG_BATCH_SENT_RESULT = 'send_batch result: %d, %s'
+LOG_MSG_ENQUEUED_FAILED_BATCH = 'Re-enqueued batch of %d events due to failure'
+
 # General constants
 EMPTY_BATCH_SLEEP_TIME = 2  # Seconds
 NO_CONNECTION_SLEEP_TIME = 2  # Seconds
-REST_URL_TEMPLATE = 'https://{host}/pysdk/{token}'
-CONN_VALIDATION_URL_TEMPLATE = 'https://{host}/'
+REST_URL_TEMPLATE = 'http{secure}://{host}/pysdk/{token}'
+CONN_VALIDATION_URL_TEMPLATE = 'http{secure}://{host}/'
 CONTENT_TYPE_JSON = {'Content-Type': 'application/json'}
 
 # Defaults
 DEFAULT_BATCH_INTERVAL = 5  # Seconds
-DEFAULT_BATCH_SIZE = 500000  # Bytes
+DEFAULT_BATCH_SIZE = 1000000  # Bytes
 DEFAULT_ALOOMA_ENDPOINT = 'inputs.alooma.com'
 DEFAULT_BUFFER_SIZE = 100000  # Events
 
