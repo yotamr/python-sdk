@@ -415,7 +415,7 @@ class _Sender:
             raise exceptions.ConnectionFailed(msg)
 
     def _start_sender_thread(self):
-        """Start the sender thread to initiate messaging."""
+        """Start the sender thread to initiate messaging"""
         self._sender_thread = threading.Thread(name='pysdk_sender_thread',
                                                target=self._sender_main)
         self._sender_thread.daemon = True
