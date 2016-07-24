@@ -12,7 +12,7 @@ setup(
     name=sdk_package_name,
     packages=[sdk_package_name],
     package_data={sdk_package_name: ['alooma_ca']},
-    version='2.0',
+    version='2.0.1',
     description='An easy-to-integrate SDK for your Python apps to report '
                 'events to Alooma',
     url='https://github.com/Aloomaio/python-sdk',
