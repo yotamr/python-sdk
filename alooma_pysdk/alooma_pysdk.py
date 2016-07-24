@@ -364,6 +364,7 @@ class _Sender:
         self._is_terminated = threading.Event()
         self._batch_max_size = batch_size
         self._batch_max_interval = batch_interval
+        self._exceeding_event = None
 
         # Verify connection and token
         self._choose_host()
@@ -488,22 +489,27 @@ class _Sender:
         batch_time = (datetime.datetime.utcnow() - last_batch_time)
         return batch_time.total_seconds() > self._batch_max_interval
 
-    def _is_batch_full(self, batch):
+    def _is_batch_full(self, batch, batch_members_len):
         # actual size = parentheses + `,` per event + combined len of all events
-        actual_size = 2 + (len(batch) - 1) + self._curr_batch_len
-        return actual_size >= \
-            self._batch_max_size * (1 - consts.BATCH_SIZE_MARGIN)
+        actual_size = 2 + (len(batch) - 1) + batch_members_len
+        return actual_size >= (self._batch_max_size - consts.BATCH_SIZE_MARGIN)
 
     def _get_batch(self, last_batch_time):
         batch = []
-        self._curr_batch_len = 0
+        curr_batch_len = 0
         try:
             while not self._is_batch_time_over(last_batch_time) \
-                    and not self._is_batch_full(batch):
-                dict_event = self.__dequeue_event()
-                string_event = _json_enc.encode(dict_event)
-                batch.append(string_event)
-                self._curr_batch_len += len(string_event)
+                    and not self._is_batch_full(batch, curr_batch_len):
+                event = self.__get_event()
+                event_size = len(event)
+
+                # On the rare case that the last event makes the batch too big,
+                # we store it to be emitted with the next batch
+                if curr_batch_len + event_size >= self._batch_max_size:
+                    self._exceeding_event = event
+                else:  # Event is small enough to fit in the batch
+                    batch.append(event)
+                    curr_batch_len += event_size
 
         except Queue.Empty:  # No more events to fetch
             pass
@@ -522,24 +528,15 @@ class _Sender:
         if not self._http_host:
             self._choose_host()
         last_batch_time = datetime.datetime.utcnow()
-        orig_batch = None
+        batch = None
 
         while not (self._is_terminated.isSet() and self._event_queue.empty()):
             try:
                 if not self._is_connected.isSet():
                     self._verify_connection()
 
-                orig_batch = self._get_batch(last_batch_time)
-
-                # On some very rare occasions, the last event may make the batch
-                # too large. In that case, we split the batch
-                if self._curr_batch_len >= self._batch_max_size:
-                    batches = [orig_batch[:-1], orig_batch[-1:]]
-                else:
-                    batches = [orig_batch]
-
-                for batch in batches:
-                    self._send_batch(batch)
+                batch = self._get_batch(last_batch_time)
+                self._send_batch(batch)
 
             except exceptions.ConnectionFailed:  # Failed to connect to server
                 time.sleep(consts.NO_CONNECTION_SLEEP_TIME)
@@ -552,10 +549,10 @@ class _Sender:
                 self._notify(ex.severity, ex.message)
                 self._is_connected.clear()
 
-                if orig_batch:  # Failed after pulling a batch from the queue
-                    self._enqueue_batch(orig_batch)
+                if batch:  # Failed after pulling a batch from the queue
+                    self._enqueue_batch(batch)
                     _logger.debug(consts.LOG_MSG_ENQUEUED_FAILED_BATCH,
-                                  len(orig_batch))
+                                  len(batch))
 
             else:  # We sent a batch successfully, server is reachable
                 self._is_connected.set()
@@ -596,13 +593,30 @@ class _Sender:
         self._is_terminated.set()
         self.__flush_and_close_session()
 
-    def __dequeue_event(self, block=True, timeout=1):
+    def __get_event(self, block=True, timeout=1):
         """
         Dequeues an event from the queue to be sent to the Alooma server.
-        Used only by the Sender instance
+        Used only by the Sender instance. If there is an exceeding event (an
+        event omitted from the last batch due to size), it returns it rather
+        than actually dequeuing from the main queue
         """
-        event = self._event_queue.get(block, timeout)
-        return event
+        while True:
+            if self._exceeding_event:  # An event was omitted from last batch
+                raw_event = self._exceeding_event
+                self._exceeding_event = None
+            else:  # No omitted event, get an event from the queue
+                raw_event = self._event_queue.get(block, timeout)
+
+            event = _json_enc.encode(raw_event)
+            event_size = len(event)
+
+            # If the event is bigger than the permitted batch size, ignore it
+            if event_size + 1 >= self._batch_max_size:
+                self._notify(logging.WARNING,
+                             consts.LOG_MSG_OMITTED_OVERSIZED_EVENT
+                             % event_size)
+            else:  # Event is of valid size, return it
+                return event
 
     def __flush_and_close_session(self):
         queue_size_before_flush = self._event_queue.qsize()

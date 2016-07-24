@@ -37,6 +37,7 @@ LOG_MSG_VERIFYING_CONNECTION = 'Sent connection verification to URL: %s. ' \
 LOG_MSG_BATCH_SENT_RESULT = 'send_batch result: %d, %s'
 LOG_MSG_ENQUEUED_FAILED_BATCH = 'Re-enqueued batch of %d events due to failure'
 LOG_MSG_NEW_BATCH_SIZE = 'Batch size updated to %d'
+LOG_MSG_OMITTED_OVERSIZED_EVENT = 'Omitted an over-sized event of %d bytes'
 
 # General constants
 EMPTY_BATCH_SLEEP_TIME = 2  # Seconds

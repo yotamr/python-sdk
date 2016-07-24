@@ -183,6 +183,44 @@ class TestSender(TestCase):
         assert_equal(notify_mock.call_args[0], (logging.WARNING,
                                                 consts.LOG_MSG_BUFFER_FREED))
 
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    def test_get_event(self, start_thread_mock, verify_token_mock,
+                           verify_connection_mock):
+        # Assert events are properly dequeued
+        notify_mock = Mock()
+        batch_size = 25
+        sender = apysdk._Sender('mockHost', 1234, 2, 10, batch_size, True,
+                                notify_mock)
+        event = {'rofl': 'lol'}
+        event_str = apysdk._json_enc.encode(event)
+        sender._event_queue.put(event)
+        sender._exceeding_event = None
+        assert_equal(event_str, sender._Sender__get_event())
+
+        # Assert exceeding event is dequeued first and events aren't lost
+        exceeding_event = {'lmao': 'trololol'}
+        sender._event_queue.put(event)
+        sender._exceeding_event = exceeding_event
+        exceeding_event_str = apysdk._json_enc.encode(exceeding_event)
+        assert_equal(exceeding_event_str, sender._Sender__get_event())
+        assert_equal(event_str, sender._Sender__get_event())
+
+        # Assert oversized event is omitted
+        oversized_event = {'key': ('a' * batch_size)}
+        oversized_event_size = len(apysdk._json_enc.encode(oversized_event))
+        sender._event_queue.put(oversized_event)
+        sender._event_queue.put(event)
+
+        pulled_event = sender._Sender__get_event()
+        assert_equal(event_str, pulled_event)
+        assert_equal(sender._notify.call_args[0],
+                     (logging.WARNING,
+                      consts.LOG_MSG_OMITTED_OVERSIZED_EVENT %
+                      oversized_event_size))
+
+
     @patch.object(apysdk._Sender, '_start_sender_thread')
     @patch.object(apysdk._Sender, '_verify_connection')
     @patch.object(apysdk._Sender, '_verify_token')
@@ -284,7 +322,7 @@ class TestSender(TestCase):
         # Assert we comply with the max batch size (ignore last event)
         last_batch_time = datetime.datetime.utcnow()
         batch = sender._get_batch(last_batch_time)
-        assert_true(len(''.join(batch[:-1])) < sender._batch_max_size)
+        assert_true(len(''.join(batch)) < sender._batch_max_size)
 
         # Assert we comply with the max batch interval
         last_batch_time = datetime.datetime.utcnow() - datetime.timedelta(
