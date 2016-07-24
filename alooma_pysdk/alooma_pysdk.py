@@ -8,11 +8,11 @@ import inspect
 import json
 import logging
 import random
+import requests
 import threading
 import time
 import uuid
-
-import requests
+from OpenSSL.SSL import SysCallError
 
 import consts
 import pysdk_exceptions as exceptions
@@ -167,6 +167,8 @@ class PythonSDK:
             errors.append(consts.LOG_MSG_BAD_PARAM_BLOCKING % blocking)
         else:
             self.is_blocking = blocking
+        if not isinstance(use_ssl, bool):
+            errors.append(consts.LOG_MSG_BAD_PARAM_USE_SSL % use_ssl)
         if errors:
             errors.append('The PySDK will now terminate.')
             error_message = "\n".join(['Bad parameters given:'] + errors)
@@ -363,6 +365,11 @@ class _Sender:
         self._batch_max_size = batch_size
         self._batch_max_interval = batch_interval
 
+        # Verify connection and token
+        self._choose_host()
+        self._verify_connection()
+        self._verify_token()
+
         # Start the sender thread
         self._start_sender_thread()
 
@@ -392,6 +399,10 @@ class _Sender:
         self._rest_url = consts.REST_URL_TEMPLATE.format(host=self._http_host,
                                                          token=self._token,
                                                          secure=secure)
+        self._token_verification_url = \
+            consts.TOKEN_VERIFICATION_URL_TEMPLATE.format(host=self._http_host,
+                                                          token=self._token,
+                                                          secure=secure)
 
     def _verify_connection(self):
         """
@@ -406,6 +417,12 @@ class _Sender:
                           res if res else 'No result from backend')
             if not res.ok:
                 raise requests.exceptions.RequestException(res.content)
+            remote_batch_size = res.json().get(consts.MAX_REQUEST_SIZE_FIELD,
+                                               consts.DEFAULT_BATCH_SIZE)
+            if remote_batch_size < self._batch_max_size:
+                self._batch_max_size = remote_batch_size
+                self._notify(logging.INFO,
+                             consts.LOG_MSG_NEW_BATCH_SIZE % remote_batch_size)
             self._is_connected.set()
             return True
 
@@ -413,6 +430,16 @@ class _Sender:
             msg = consts.LOG_MSG_CONNECTION_FAILED % str(ex)
             self._notify(logging.ERROR, msg)
             raise exceptions.ConnectionFailed(msg)
+
+    def _verify_token(self):
+        """
+        Verifies the validity of the token against the remote server
+        :return: True if the token is valid, else raises exceptions.BadToken
+        """
+        res = self._session.get(self._token_verification_url)
+        if not res.ok:
+            raise exceptions.BadToken(res.content)
+        return True
 
     def _start_sender_thread(self):
         """Start the sender thread to initiate messaging"""
@@ -445,9 +472,15 @@ class _Sender:
                                      headers=consts.CONTENT_TYPE_JSON)
             _logger.debug(consts.LOG_MSG_BATCH_SENT_RESULT, res.status_code,
                           res.content)
-            if not res.ok:
+            if res.status_code == 400:
+                self._notify(logging.CRITICAL, consts.LOG_MSG_BAD_TOKEN)
+                raise exceptions.BadToken(consts.LOG_MSG_BAD_TOKEN)
+            elif not res.ok:
                 raise exceptions.SendFailed("Got bad response code - %s: %s" % (
                     res.status_code, res.content if res.content else 'No info'))
+        except (requests.exceptions.ConnectionError, SysCallError) as ex:
+            self._is_connected.clear()
+            raise exceptions.BatchTooBig(consts.LOG_MSG_BATCH_TOO_BIG % str(ex))
         except requests.exceptions.RequestException as ex:
             raise exceptions.SendFailed(str(ex))
 
@@ -455,27 +488,30 @@ class _Sender:
         batch_time = (datetime.datetime.utcnow() - last_batch_time)
         return batch_time.total_seconds() > self._batch_max_interval
 
-    def _is_batch_full(self, batch_len):
-        return batch_len >= (0.999 * self._batch_max_size)
+    def _is_batch_full(self, batch):
+        # actual size = parentheses + `,` per event + combined len of all events
+        actual_size = 2 + (len(batch) - 1) + self._curr_batch_len
+        return actual_size >= \
+            self._batch_max_size * (1 - consts.BATCH_SIZE_MARGIN)
 
     def _get_batch(self, last_batch_time):
         batch = []
-        batch_len = 0
+        self._curr_batch_len = 0
         try:
             while not self._is_batch_time_over(last_batch_time) \
-                    and not self._is_batch_full(batch_len):
+                    and not self._is_batch_full(batch):
                 dict_event = self.__dequeue_event()
                 string_event = _json_enc.encode(dict_event)
                 batch.append(string_event)
-                batch_len += len(string_event) + 1  # Accounts for `,` separator
+                self._curr_batch_len += len(string_event)
 
         except Queue.Empty:  # No more events to fetch
             pass
 
-        if batch:
-            return batch
-        else:
+        if not batch:
             raise exceptions.EmptyBatch
+        else:
+            return batch
 
     def _sender_main(self):
         """
@@ -483,17 +519,27 @@ class _Sender:
         server. Events are sent every <self._batch_interval> seconds or whenever
         batch size reaches <self._batch_size>
         """
-        self._choose_host()
+        if not self._http_host:
+            self._choose_host()
         last_batch_time = datetime.datetime.utcnow()
-        batch = None
+        orig_batch = None
 
         while not (self._is_terminated.isSet() and self._event_queue.empty()):
             try:
                 if not self._is_connected.isSet():
                     self._verify_connection()
 
-                batch = self._get_batch(last_batch_time)
-                self._send_batch(batch)
+                orig_batch = self._get_batch(last_batch_time)
+
+                # On some very rare occasions, the last event may make the batch
+                # too large. In that case, we split the batch
+                if self._curr_batch_len >= self._batch_max_size:
+                    batches = [orig_batch[:-1], orig_batch[-1:]]
+                else:
+                    batches = [orig_batch]
+
+                for batch in batches:
+                    self._send_batch(batch)
 
             except exceptions.ConnectionFailed:  # Failed to connect to server
                 time.sleep(consts.NO_CONNECTION_SLEEP_TIME)
@@ -503,13 +549,13 @@ class _Sender:
                 time.sleep(consts.EMPTY_BATCH_SLEEP_TIME)
 
             except exceptions.SendFailed as ex:  # Failed to send an event batch
-                self._notify(logging.ERROR, ex.message)
+                self._notify(ex.severity, ex.message)
                 self._is_connected.clear()
 
-                if batch:  # Failed after pulling a batch from the queue
-                    self._enqueue_batch(batch)
+                if orig_batch:  # Failed after pulling a batch from the queue
+                    self._enqueue_batch(orig_batch)
                     _logger.debug(consts.LOG_MSG_ENQUEUED_FAILED_BATCH,
-                                  len(batch))
+                                  len(orig_batch))
 
             else:  # We sent a batch successfully, server is reachable
                 self._is_connected.set()

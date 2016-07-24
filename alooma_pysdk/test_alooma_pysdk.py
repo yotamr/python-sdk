@@ -8,7 +8,8 @@ import requests
 from mock import patch, Mock
 from nose.plugins.attrib import attr
 from nose.tools import assert_equal, assert_true, assert_false, \
-    assert_is_none, assert_is_not_none, assert_not_equal, assert_in, raises
+    assert_is_none, assert_is_not_none, assert_not_equal, assert_in, raises, \
+    assert_raises
 
 import alooma_pysdk as apysdk
 import consts
@@ -26,7 +27,8 @@ class TestPythonSDK(TestCase):
         self.__old_get_sender = apysdk._get_sender
         apysdk._get_sender = self.get_sender_mock
 
-    def _get_python_sdk(self, *args, **kwargs):
+    @staticmethod
+    def _get_python_sdk(*args, **kwargs):
         if not args:
             args = list(args)
             args.append('some-token')
@@ -34,7 +36,7 @@ class TestPythonSDK(TestCase):
         return sdk
 
     def test_bad_param_types_raise(self):
-        args = (321, 231, 643, 140, '235', '346', '467', '588')
+        args = (321, 231, 643, 140, '235', '346', '467', '588', '13')
         raised = False
         try:
             self._get_python_sdk(*args)
@@ -71,6 +73,18 @@ class TestPythonSDK(TestCase):
         custom_et = 'custom'
         sdk = self._get_python_sdk(event_type=custom_et)
         assert_equal(custom_et, sdk._get_event_type('blah'))
+
+        # Test bad token raises
+        expected_exception = exceptions.BadToken
+        self.get_sender_mock.side_effect = expected_exception
+        assert_raises(expected_exception, self._get_python_sdk, test_token)
+        self.get_sender_mock.side_effect = None
+
+        # Test failed connection raises
+        expected_exception = exceptions.ConnectionFailed
+        self.get_sender_mock.side_effect = expected_exception
+        assert_raises(expected_exception, self._get_python_sdk, test_token)
+        self.get_sender_mock.side_effect = None
 
     @patch.object(apysdk.PythonSDK, '_format_event')
     def test_report(self, format_event_mock):
@@ -143,7 +157,10 @@ class TestPythonSDK(TestCase):
 
 class TestSender(TestCase):
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_enqueue_event(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_enqueue_event(self, start_thread_mock, verify_token_mock,
+                           verify_connection_mock):
         # Test that event is enqueued properly
         notify_mock = Mock()
         sender = apysdk._Sender('mockHost', 1234, 1, 10, 10,
@@ -167,7 +184,10 @@ class TestSender(TestCase):
                                                 consts.LOG_MSG_BUFFER_FREED))
 
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_choose_host(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_choose_host(self, verify_token_mock, verify_connection_mock,
+                         start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
 
@@ -176,7 +196,6 @@ class TestSender(TestCase):
         sender = apysdk._Sender(host, 1234, buffer_size, 100, 100,
                                 True, notify_mock)
 
-        assert_is_none(sender._http_host)
         sender._choose_host()
         assert_equal(host, sender._http_host)
 
@@ -214,9 +233,25 @@ class TestSender(TestCase):
         sender._verify_connection()
 
 
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    @patch.object(requests, 'Session')
+    @raises(exceptions.BadToken)
+    def test_verify_token(self, session_mock, start_sender_mock):
+        # Assert the function throws the right exception when it fails
+        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd', True)
+        sender._notify = Mock()
+        sender._connection_validation_url = 'asd'
+        sender._session.get.return_value = Mock(ok=False)
+        sender._verify_token()
+
+
     @attr('slow')
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_get_batch_empty_queue_raises(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_get_batch_empty_queue_raises(self, verify_token_mock,
+                                          verify_connection_mock,
+                                          start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
@@ -232,7 +267,10 @@ class TestSender(TestCase):
         assert_true(raised)
 
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_get_batch(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_get_batch(self, verify_token_mock, verify_connection_mock,
+                       start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
@@ -274,15 +312,16 @@ class TestSender(TestCase):
         assert_equal(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
 
         # Assert send fails with proper exception
-        sender._session.post.return_value = Mock(ok=False)
+        sender._session.post.return_value = Mock(ok=False, status_code=500)
+        assert_raises(exceptions.SendFailed, sender._send_batch, batch)
 
-        raised = False
-        try:
-            sender._send_batch(batch)
-        except exceptions.SendFailed:
-            raised = True
+        # Assert bad token raises proper error
+        sender._session.post.return_value = Mock(status_code=400)
+        assert_raises(exceptions.BadToken, sender._send_batch, batch)
 
-        assert_true(raised)
+        # Assert batch too big raises proper exception
+        sender._session.post.side_effect = requests.exceptions.ConnectionError
+        assert_raises(exceptions.BatchTooBig, sender._send_batch, batch)
 
 
 class TestAloomaEncoder(TestCase):
