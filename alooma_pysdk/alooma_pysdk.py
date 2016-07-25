@@ -8,11 +8,17 @@ import inspect
 import json
 import logging
 import random
+import requests
 import threading
 import time
 import uuid
 
-import requests
+try:
+    from OpenSSL.SSL import SysCallError
+
+    broken_pipe_errors = (requests.exceptions.ConnectionError, SysCallError)
+except ImportError:
+    broken_pipe_errors = (requests.exceptions.ConnectionError,)
 
 import consts
 import pysdk_exceptions as exceptions
@@ -34,11 +40,13 @@ def __get_logger():
     """
     logger = logging.getLogger(__name__)
     if logger.level == logging.NOTSET:
-        logger.addHandler(logging.StreamHandler())
+        handler = logging.StreamHandler()
+        handler.setLevel(0)
+        logger.addHandler(handler)
         logger.handlers[0].level = logger.level = logging.DEBUG
         logger.handlers[0].formatter = logging.Formatter(
-                '%(asctime)s [%(levelname)s] {}: %(message)s'.format(__name__),
-                '%Y-%m-%dT%H:%M:%S')
+            '%(asctime)s [%(levelname)s] {}: %(message)s'.format(__name__),
+            '%Y-%m-%dT%H:%M:%S')
         logger.propagate = 0
         logger.warn('Using the default logger configuration')
     return logger
@@ -67,7 +75,7 @@ class AloomaEncoder(json.JSONEncoder):
             return super(AloomaEncoder, self).default(obj)
 
 
-_json_enc = AloomaEncoder()
+_json_enc = AloomaEncoder(separators=(',', ':'))
 
 
 class PythonSDK:
@@ -90,7 +98,8 @@ class PythonSDK:
                  event_type=None, callback=None,
                  buffer_size=consts.DEFAULT_BUFFER_SIZE, blocking=False,
                  batch_interval=consts.DEFAULT_BATCH_INTERVAL,
-                 batch_size=consts.DEFAULT_BATCH_SIZE, *args, **kwargs):
+                 batch_size=consts.DEFAULT_BATCH_SIZE, use_ssl=True,
+                 *args, **kwargs):
         """
         Initializes the Alooma Python SDK, creating a connection to
         the Alooma server
@@ -119,6 +128,9 @@ class PythonSDK:
                                seconds. Default is 5 seconds
         :param batch_size:     (Optional) Determines the batch size in bytes.
                                Default is 4096 bytes
+        :param use_ssl:        (Optional) If True, the SDK will attempt to use
+                               an HTTPS connection. Else, a simple HTTP
+                               connection will be used. Default is `True`
         """
         _logger.debug('init. locals=%s' % locals())
 
@@ -148,7 +160,7 @@ class PythonSDK:
                                                                       list):
             errors.append(consts.LOG_MSG_BAD_PARAM_SERVERS % servers)
         if event_type and not isinstance(event_type, basestring) \
-                and not callable(event_type):
+            and not callable(event_type):
             et_type = type(event_type)
             errors.append(consts.LOG_MSG_BAD_PARAM_EVENT_TYPE % (event_type,
                                                                  et_type))
@@ -161,16 +173,18 @@ class PythonSDK:
             errors.append(consts.LOG_MSG_BAD_PARAM_BLOCKING % blocking)
         else:
             self.is_blocking = blocking
+        if not isinstance(use_ssl, bool):
+            errors.append(consts.LOG_MSG_BAD_PARAM_USE_SSL % use_ssl)
         if errors:
             errors.append('The PySDK will now terminate.')
             error_message = "\n".join(['Bad parameters given:'] + errors)
-            self._notify(consts.LOG_INIT_FAILED, error_message)
+            self._notify(logging.CRITICAL, error_message)
             raise ValueError(error_message)
 
         # Get a Sender to get events from the queue and send them.
         # Sender is a Singleton per parameter group
         sender_params = (servers, token, buffer_size, batch_interval,
-                         batch_size)
+                         batch_size, use_ssl)
         self._sender = _get_sender(*sender_params, notify_func=self._notify)
 
         self.token = token
@@ -241,8 +255,7 @@ class PythonSDK:
         """
         # Don't allow reporting if the underlying sender is terminated
         if self._sender.is_terminated:
-            self._notify(consts.LOG_FAILED_SEND,
-                         consts.LOG_MSG_REPORT_AFTER_TERMINATION)
+            self._notify(logging.ERROR, consts.LOG_MSG_REPORT_AFTER_TERMINATION)
             return False
 
         # Send the event to the queue if it is a dict or a string.
@@ -254,7 +267,7 @@ class PythonSDK:
 
         else:  # Event is not a dict nor a string. Deny it.
             error_message = (consts.LOG_MSG_BAD_EVENT % (type(event), event))
-            self._notify(consts.LOG_FAILED_SEND, error_message)
+            self._notify(logging.ERROR, error_message)
             return False
 
     def report_many(self, event_list, metadata=None, block=None):
@@ -279,16 +292,20 @@ class PythonSDK:
                 failed_list.append((index, event))
         return failed_list
 
-    def _notify(self, msg_type, message):
+    def _notify(self, log_level, message):
         """
         Calls the callback function and logs messages using the PySDK logger
+        :param log_level: An integer representing the log level, as specified
+                          in the Python `logging` library
+        :param message:   The actual message to be sent to the logger and the
+                          `callback` function
         """
         timestamp = datetime.datetime.utcnow()
-        _logger.log(msg_type, str(message))
+        _logger.log(log_level, str(message))
         try:
-            self._callback(msg_type, message, timestamp)
+            self._callback(log_level, message, timestamp)
         except Exception as ex:
-            _logger.warning(consts.LOG_MSG_BAD_PARAM_CALLBACK % str(ex))
+            _logger.warning(consts.LOG_MSG_CALLBACK_FAILURE % str(ex))
 
     @staticmethod
     def _default_callback(msg_type, message, timestamp):
@@ -327,7 +344,7 @@ class _Sender:
     """
 
     def __init__(self, hosts, token, buffer_size, batch_interval, batch_size,
-                 notify):
+                 use_ssl, notify):
 
         # This is a concurrent FIFO queue
         self._event_queue = Queue.Queue(buffer_size)
@@ -339,6 +356,7 @@ class _Sender:
         if isinstance(hosts, str) or isinstance(hosts, unicode):
             hosts = hosts.strip().split(',')
         self._hosts = hosts
+        self._use_ssl = use_ssl
         self._http_host = None
         self._token = token
         self._rest_url = None
@@ -352,6 +370,12 @@ class _Sender:
         self._is_terminated = threading.Event()
         self._batch_max_size = batch_size
         self._batch_max_interval = batch_interval
+        self._exceeding_event = None
+
+        # Verify connection and token
+        self._choose_host()
+        self._verify_connection()
+        self._verify_token()
 
         # Start the sender thread
         self._start_sender_thread()
@@ -371,14 +395,21 @@ class _Sender:
             while choice == self._http_host:
                 choice = random.choice(self._hosts)
             self._http_host = choice
-            self._notify(consts.LOG_CONNECTING,
+            self._notify(logging.INFO,
                          consts.LOG_MSG_NEW_SERVER % self._http_host)
 
         # Set the validation and the REST URLs
+        secure = 's' if self._use_ssl else ''
         self._connection_validation_url = \
-            consts.CONN_VALIDATION_URL_TEMPLATE.format(host=self._http_host)
+            consts.CONN_VALIDATION_URL_TEMPLATE.format(host=self._http_host,
+                                                       secure=secure)
         self._rest_url = consts.REST_URL_TEMPLATE.format(host=self._http_host,
-                                                         token=self._token)
+                                                         token=self._token,
+                                                         secure=secure)
+        self._token_verification_url = \
+            consts.TOKEN_VERIFICATION_URL_TEMPLATE.format(host=self._http_host,
+                                                          token=self._token,
+                                                          secure=secure)
 
     def _verify_connection(self):
         """
@@ -388,18 +419,37 @@ class _Sender:
         """
         try:
             res = self._session.get(self._connection_validation_url, json={})
+            _logger.debug(consts.LOG_MSG_VERIFYING_CONNECTION,
+                          self._connection_validation_url,
+                          res if res else 'No result from backend')
             if not res.ok:
                 raise requests.exceptions.RequestException(res.content)
+            remote_batch_size = res.json().get(consts.MAX_REQUEST_SIZE_FIELD,
+                                               consts.DEFAULT_BATCH_SIZE)
+            if remote_batch_size < self._batch_max_size:
+                self._batch_max_size = remote_batch_size
+                self._notify(logging.INFO,
+                             consts.LOG_MSG_NEW_BATCH_SIZE % remote_batch_size)
             self._is_connected.set()
             return True
 
         except requests.exceptions.RequestException as ex:
             msg = consts.LOG_MSG_CONNECTION_FAILED % str(ex)
-            self._notify(consts.LOG_CANT_CONNECT, msg)
+            self._notify(logging.ERROR, msg)
             raise exceptions.ConnectionFailed(msg)
 
+    def _verify_token(self):
+        """
+        Verifies the validity of the token against the remote server
+        :return: True if the token is valid, else raises exceptions.BadToken
+        """
+        res = self._session.get(self._token_verification_url)
+        if not res.ok:
+            raise exceptions.BadToken(res.content)
+        return True
+
     def _start_sender_thread(self):
-        """Start the sender thread to initiate messaging."""
+        """Start the sender thread to initiate messaging"""
         self._sender_thread = threading.Thread(name='pysdk_sender_thread',
                                                target=self._sender_main)
         self._sender_thread.daemon = True
@@ -421,12 +471,23 @@ class _Sender:
         Sends a batch to the destination server via HTTP REST API
         """
         try:
-            json_batch = _json_enc.encode(batch)
+
+            json_batch = '[' + ','.join(batch) + ']'  # Make JSON array string
+            _logger.debug(consts.LOG_MSG_SENDING_BATCH, len(batch),
+                          len(json_batch), self._rest_url)
             res = self._session.post(self._rest_url, data=json_batch,
                                      headers=consts.CONTENT_TYPE_JSON)
-            if not res.ok:
+            _logger.debug(consts.LOG_MSG_BATCH_SENT_RESULT, res.status_code,
+                          res.content)
+            if res.status_code == 400:
+                self._notify(logging.CRITICAL, consts.LOG_MSG_BAD_TOKEN)
+                raise exceptions.BadToken(consts.LOG_MSG_BAD_TOKEN)
+            elif not res.ok:
                 raise exceptions.SendFailed("Got bad response code - %s: %s" % (
                     res.status_code, res.content if res.content else 'No info'))
+        except broken_pipe_errors as ex:
+            self._is_connected.clear()
+            raise exceptions.BatchTooBig(consts.LOG_MSG_BATCH_TOO_BIG % str(ex))
         except requests.exceptions.RequestException as ex:
             raise exceptions.SendFailed(str(ex))
 
@@ -434,26 +495,35 @@ class _Sender:
         batch_time = (datetime.datetime.utcnow() - last_batch_time)
         return batch_time.total_seconds() > self._batch_max_interval
 
-    def _is_batch_full(self, batch_len):
-        return batch_len > self._batch_max_size
+    def _is_batch_full(self, batch, batch_members_len):
+        # actual size = parentheses + `,` per event + combined len of all events
+        actual_size = 2 + (len(batch) - 1) + batch_members_len
+        return actual_size >= (self._batch_max_size - consts.BATCH_SIZE_MARGIN)
 
     def _get_batch(self, last_batch_time):
         batch = []
-        batch_len = 0
+        curr_batch_len = 0
         try:
             while not self._is_batch_time_over(last_batch_time) \
-                    and not self._is_batch_full(batch_len):
-                event = self.__dequeue_event()
-                batch.append(event)
-                batch_len += len(event)
+                    and not self._is_batch_full(batch, curr_batch_len):
+                event = self.__get_event()
+                event_size = len(event)
+
+                # On the rare case that the last event makes the batch too big,
+                # we store it to be emitted with the next batch
+                if curr_batch_len + event_size >= self._batch_max_size:
+                    self._exceeding_event = event
+                else:  # Event is small enough to fit in the batch
+                    batch.append(event)
+                    curr_batch_len += event_size
 
         except Queue.Empty:  # No more events to fetch
             pass
 
-        if batch:
-            return batch
-        else:
+        if not batch:
             raise exceptions.EmptyBatch
+        else:
+            return batch
 
     def _sender_main(self):
         """
@@ -461,7 +531,8 @@ class _Sender:
         server. Events are sent every <self._batch_interval> seconds or whenever
         batch size reaches <self._batch_size>
         """
-        self._choose_host()
+        if not self._http_host:
+            self._choose_host()
         last_batch_time = datetime.datetime.utcnow()
         batch = None
 
@@ -481,11 +552,13 @@ class _Sender:
                 time.sleep(consts.EMPTY_BATCH_SLEEP_TIME)
 
             except exceptions.SendFailed as ex:  # Failed to send an event batch
-                self._notify(consts.LOG_FAILED_SEND, ex.message)
+                self._notify(ex.severity, ex.message)
                 self._is_connected.clear()
 
                 if batch:  # Failed after pulling a batch from the queue
                     self._enqueue_batch(batch)
+                    _logger.debug(consts.LOG_MSG_ENQUEUED_FAILED_BATCH,
+                                  len(batch))
 
             else:  # We sent a batch successfully, server is reachable
                 self._is_connected.set()
@@ -505,8 +578,7 @@ class _Sender:
             self._event_queue.put_nowait(event)
 
             if self._notified_buffer_full:  # Non-blocking and buffer was full
-                self._notify(consts.LOG_BUFFER_FREED,
-                             consts.LOG_MSG_BUFFER_FREED)
+                self._notify(logging.WARNING, consts.LOG_MSG_BUFFER_FREED)
                 self._notified_buffer_full = False
 
         except Queue.Full:
@@ -514,7 +586,7 @@ class _Sender:
                 self._event_queue.put(event)
 
             elif not self._notified_buffer_full:  # Don't block, msg not emitted
-                self._notify(consts.LOG_BUFFER_FULL, consts.LOG_MSG_BUFFER_FULL)
+                self._notify(logging.WARNING, consts.LOG_MSG_BUFFER_FULL)
                 self._notified_buffer_full = True
                 return False
 
@@ -527,20 +599,38 @@ class _Sender:
         self._is_terminated.set()
         self.__flush_and_close_session()
 
-    def __dequeue_event(self, block=True, timeout=1):
+    def __get_event(self, block=True, timeout=1):
         """
-        Dequeues an event from the queue to be sent to the Alooma server.
-        Used only by the Sender instance
+        Retrieves an event. If self._exceeding_event is not None, it'll be
+        returned. Otherwise, an event is dequeued from the event buffer. If
+        The event which was retrieved is bigger than the permitted batch size,
+        it'll be omitted, and the next event in the event buffer is returned
         """
-        event = self._event_queue.get(block, timeout)
-        return event
+        while True:
+            if self._exceeding_event:  # An event was omitted from last batch
+                raw_event = self._exceeding_event
+                self._exceeding_event = None
+            else:  # No omitted event, get an event from the queue
+                raw_event = self._event_queue.get(block, timeout)
+
+            event = _json_enc.encode(raw_event)
+            event_size = len(event)
+
+            # If the event is bigger than the permitted batch size, ignore it
+            # The ( - 2 ) accounts for the parentheses enclosing the batch
+            if event_size - 2 >= self._batch_max_size:
+                self._notify(logging.WARNING,
+                             consts.LOG_MSG_OMITTED_OVERSIZED_EVENT
+                             % event_size)
+            else:  # Event is of valid size, return it
+                return event
 
     def __flush_and_close_session(self):
         queue_size_before_flush = self._event_queue.qsize()
         while not self._event_queue.empty():
             time.sleep(0.5)
         self._session.close()
-        self._notify(consts.LOG_TERMINATED,
+        self._notify(logging.INFO,
                      'Terminated the connection to %s after flushing %d '
                      'events' % (self._hosts, queue_size_before_flush))
 

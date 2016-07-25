@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 from unittest import TestCase
 
 import decimal
@@ -7,7 +8,8 @@ import requests
 from mock import patch, Mock
 from nose.plugins.attrib import attr
 from nose.tools import assert_equal, assert_true, assert_false, \
-    assert_is_none, assert_is_not_none, assert_not_equal, assert_in, raises
+    assert_is_none, assert_is_not_none, assert_not_equal, assert_in, raises, \
+    assert_raises
 
 import alooma_pysdk as apysdk
 import consts
@@ -25,7 +27,8 @@ class TestPythonSDK(TestCase):
         self.__old_get_sender = apysdk._get_sender
         apysdk._get_sender = self.get_sender_mock
 
-    def _get_python_sdk(self, *args, **kwargs):
+    @staticmethod
+    def _get_python_sdk(*args, **kwargs):
         if not args:
             args = list(args)
             args.append('some-token')
@@ -33,7 +36,7 @@ class TestPythonSDK(TestCase):
         return sdk
 
     def test_bad_param_types_raise(self):
-        args = (321, 231, 643, 140, '235', '346', '467', '588')
+        args = (321, 231, 643, 140, '235', '346', '467', '588', '13')
         raised = False
         try:
             self._get_python_sdk(*args)
@@ -63,13 +66,25 @@ class TestPythonSDK(TestCase):
                                     sdk.token,
                                     consts.DEFAULT_BUFFER_SIZE,
                                     consts.DEFAULT_BATCH_INTERVAL,
-                                    consts.DEFAULT_BATCH_SIZE)),
+                                    consts.DEFAULT_BATCH_SIZE, True)),
                      (passed_to_sender[1].values()[0], passed_to_sender[0]))
 
         # Test and ensure event type setting works
         custom_et = 'custom'
         sdk = self._get_python_sdk(event_type=custom_et)
         assert_equal(custom_et, sdk._get_event_type('blah'))
+
+        # Test bad token raises
+        expected_exception = exceptions.BadToken
+        self.get_sender_mock.side_effect = expected_exception
+        assert_raises(expected_exception, self._get_python_sdk, test_token)
+        self.get_sender_mock.side_effect = None
+
+        # Test failed connection raises
+        expected_exception = exceptions.ConnectionFailed
+        self.get_sender_mock.side_effect = expected_exception
+        assert_raises(expected_exception, self._get_python_sdk, test_token)
+        self.get_sender_mock.side_effect = None
 
     @patch.object(apysdk.PythonSDK, '_format_event')
     def test_report(self, format_event_mock):
@@ -142,11 +157,14 @@ class TestPythonSDK(TestCase):
 
 class TestSender(TestCase):
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_enqueue_event(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_enqueue_event(self, start_thread_mock, verify_token_mock,
+                           verify_connection_mock):
         # Test that event is enqueued properly
         notify_mock = Mock()
         sender = apysdk._Sender('mockHost', 1234, 1, 10, 10,
-                                notify_mock)
+                                True, notify_mock)
         some_event = {'event': 1}
         ret = sender.enqueue_event(some_event, False)
         assert_true(ret)
@@ -155,27 +173,67 @@ class TestSender(TestCase):
         # Test failing with notification when buffer is full
         sender.enqueue_event(some_event, False)
         assert_false(sender.enqueue_event(some_event, False))
-        assert_equal(notify_mock.call_args[0], (consts.LOG_BUFFER_FULL,
+        assert_equal(notify_mock.call_args[0], (logging.WARNING,
                                                 consts.LOG_MSG_BUFFER_FULL))
         assert_true(sender._notified_buffer_full)
 
         # Test recovering when buffer frees up
         sender._event_queue.get_nowait()
         assert_true(sender.enqueue_event(some_event, False))
-        assert_equal(notify_mock.call_args[0], (consts.LOG_BUFFER_FREED,
+        assert_equal(notify_mock.call_args[0], (logging.WARNING,
                                                 consts.LOG_MSG_BUFFER_FREED))
 
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_choose_host(self, start_thread_mock):
+    def test_get_event(self, start_thread_mock, verify_token_mock,
+                           verify_connection_mock):
+        # Assert events are properly dequeued
+        notify_mock = Mock()
+        batch_size = 25
+        sender = apysdk._Sender('mockHost', 1234, 2, 10, batch_size, True,
+                                notify_mock)
+        event = {'rofl': 'lol'}
+        event_str = apysdk._json_enc.encode(event)
+        sender._event_queue.put(event)
+        sender._exceeding_event = None
+        assert_equal(event_str, sender._Sender__get_event())
+
+        # Assert exceeding event is dequeued first and events aren't lost
+        exceeding_event = {'lmao': 'trololol'}
+        sender._event_queue.put(event)
+        sender._exceeding_event = exceeding_event
+        exceeding_event_str = apysdk._json_enc.encode(exceeding_event)
+        assert_equal(exceeding_event_str, sender._Sender__get_event())
+        assert_equal(event_str, sender._Sender__get_event())
+
+        # Assert oversized event is omitted
+        oversized_event = {'key': ('a' * batch_size)}
+        oversized_event_size = len(apysdk._json_enc.encode(oversized_event))
+        sender._event_queue.put(oversized_event)
+        sender._event_queue.put(event)
+
+        pulled_event = sender._Sender__get_event()
+        assert_equal(event_str, pulled_event)
+        assert_equal(sender._notify.call_args[0],
+                     (logging.WARNING,
+                      consts.LOG_MSG_OMITTED_OVERSIZED_EVENT %
+                      oversized_event_size))
+
+
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_choose_host(self, verify_token_mock, verify_connection_mock,
+                         start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
 
         # Test when only one host exists and it's the first time
         host = 'mockHost'
         sender = apysdk._Sender(host, 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
 
-        assert_is_none(sender._http_host)
         sender._choose_host()
         assert_equal(host, sender._http_host)
 
@@ -186,7 +244,7 @@ class TestSender(TestCase):
         # Test when there are multiple hosts
         hosts = ['1', '2', '3', '4', '5', '6']
         sender = apysdk._Sender(hosts, 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
         sender._choose_host()
         assert_is_not_none(sender._http_host)
 
@@ -206,20 +264,36 @@ class TestSender(TestCase):
     @raises(exceptions.ConnectionFailed)
     def test_verify_connection(self, session_mock, start_sender_mock):
         # Assert the function throws the right exception when it fails
-        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd')
+        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd', True)
         sender._notify = Mock()
         sender._connection_validation_url = 'asd'
         sender._session.get.return_value = Mock(ok=False)
         sender._verify_connection()
 
 
+    @patch.object(apysdk._Sender, '_start_sender_thread')
+    @patch.object(requests, 'Session')
+    @raises(exceptions.BadToken)
+    def test_verify_token(self, session_mock, start_sender_mock):
+        # Assert the function throws the right exception when it fails
+        sender = apysdk._Sender('12', 1234, 10, 100, 100, 'asd', True)
+        sender._notify = Mock()
+        sender._connection_validation_url = 'asd'
+        sender._session.get.return_value = Mock(ok=False)
+        sender._verify_token()
+
+
     @attr('slow')
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_get_batch_empty_queue_raises(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_get_batch_empty_queue_raises(self, verify_token_mock,
+                                          verify_connection_mock,
+                                          start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
 
         # Assert empty queue raises EmptyBatch
         last_batch_time = datetime.datetime.utcnow()
@@ -231,11 +305,14 @@ class TestSender(TestCase):
         assert_true(raised)
 
     @patch.object(apysdk._Sender, '_start_sender_thread')
-    def test_get_batch(self, start_thread_mock):
+    @patch.object(apysdk._Sender, '_verify_connection')
+    @patch.object(apysdk._Sender, '_verify_token')
+    def test_get_batch(self, verify_token_mock, verify_connection_mock,
+                       start_thread_mock):
         notify_mock = Mock()
         buffer_size = 1000
         sender = apysdk._Sender('mockHost', 1234, buffer_size, 100, 100,
-                                notify_mock)
+                                True, notify_mock)
 
         # Populate the queue
         for i in range(buffer_size):
@@ -245,7 +322,7 @@ class TestSender(TestCase):
         # Assert we comply with the max batch size (ignore last event)
         last_batch_time = datetime.datetime.utcnow()
         batch = sender._get_batch(last_batch_time)
-        assert_true(len(''.join(batch[:-1])) < sender._batch_max_size)
+        assert_true(len(''.join(batch)) < sender._batch_max_size)
 
         # Assert we comply with the max batch interval
         last_batch_time = datetime.datetime.utcnow() - datetime.timedelta(
@@ -260,27 +337,29 @@ class TestSender(TestCase):
     @patch.object(requests, 'Session')
     def test_send_batch(self, session_mock):
         notify_mock = Mock()
-        sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, notify_mock)
-        batch = [{"event": 1}, {"event": 2}]
-        stringified_batch = apysdk._json_enc.encode(batch)
+        sender = apysdk._Sender('mockHost', 1234, 10, 100, 100, True,
+                                notify_mock)
+        encode = apysdk._json_enc.encode
+        batch = [encode({"event": 1}), encode({"event": 2})]
 
         # Assert send batch sends a stringified batch
         sender._send_batch(batch)
         call_args = sender._session.post.call_args
         assert_equal(call_args[0][0], sender._rest_url)
-        assert_equal(call_args[1]['data'], stringified_batch)
+        assert_equal(call_args[1]['data'], '[' + ','.join(batch) + ']')
         assert_equal(call_args[1]['headers'], consts.CONTENT_TYPE_JSON)
 
         # Assert send fails with proper exception
-        sender._session.post.return_value = Mock(ok=False)
+        sender._session.post.return_value = Mock(ok=False, status_code=500)
+        assert_raises(exceptions.SendFailed, sender._send_batch, batch)
 
-        raised = False
-        try:
-            sender._send_batch(batch)
-        except exceptions.SendFailed:
-            raised = True
+        # Assert bad token raises proper error
+        sender._session.post.return_value = Mock(status_code=400)
+        assert_raises(exceptions.BadToken, sender._send_batch, batch)
 
-        assert_true(raised)
+        # Assert batch too big raises proper exception
+        sender._session.post.side_effect = requests.exceptions.ConnectionError
+        assert_raises(exceptions.BatchTooBig, sender._send_batch, batch)
 
 
 class TestAloomaEncoder(TestCase):
