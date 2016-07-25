@@ -16,9 +16,9 @@ import uuid
 try:
     from OpenSSL.SSL import SysCallError
 
-    broken_pipe_errors = (requests.exceptions.ConnectionError, SysCallError)
+    _broken_pipe_errors = (requests.exceptions.ConnectionError, SysCallError)
 except ImportError:
-    broken_pipe_errors = (requests.exceptions.ConnectionError,)
+    _broken_pipe_errors = (requests.exceptions.ConnectionError,)
 
 import consts
 import pysdk_exceptions as exceptions
@@ -485,7 +485,7 @@ class _Sender:
             elif not res.ok:
                 raise exceptions.SendFailed("Got bad response code - %s: %s" % (
                     res.status_code, res.content if res.content else 'No info'))
-        except broken_pipe_errors as ex:
+        except _broken_pipe_errors as ex:
             self._is_connected.clear()
             raise exceptions.BatchTooBig(consts.LOG_MSG_BATCH_TOO_BIG % str(ex))
         except requests.exceptions.RequestException as ex:
