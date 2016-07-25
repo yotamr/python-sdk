@@ -601,10 +601,10 @@ class _Sender:
 
     def __get_event(self, block=True, timeout=1):
         """
-        Dequeues an event from the queue to be sent to the Alooma server.
-        Used only by the Sender instance. If there is an exceeding event (an
-        event omitted from the last batch due to size), it returns it rather
-        than actually dequeuing from the main queue
+        Retrieves an event. If self._exceeding_event is not None, it'll be
+        returned. Otherwise, an event is dequeued from the event buffer. If
+        The event which was retrieved is bigger than the permitted batch size,
+        it'll be omitted, and the next event in the event buffer is returned
         """
         while True:
             if self._exceeding_event:  # An event was omitted from last batch
@@ -617,7 +617,8 @@ class _Sender:
             event_size = len(event)
 
             # If the event is bigger than the permitted batch size, ignore it
-            if event_size + 1 >= self._batch_max_size:
+            # The ( - 2 ) accounts for the parentheses enclosing the batch
+            if event_size - 2 >= self._batch_max_size:
                 self._notify(logging.WARNING,
                              consts.LOG_MSG_OMITTED_OVERSIZED_EVENT
                              % event_size)
