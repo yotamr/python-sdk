@@ -86,6 +86,16 @@ class TestPythonSDK(TestCase):
         assert_raises(expected_exception, self._get_python_sdk, test_token)
         self.get_sender_mock.side_effect = None
 
+    def test_is_connected(self):
+        sdk = self._get_python_sdk('test')
+        if hasattr(sdk, '_sender'):
+            del sdk._sender
+        assert_false(sdk.is_connected)
+
+        is_connected_mock = True
+        sdk._sender = Mock(is_connected=is_connected_mock)
+        assert_equal(is_connected_mock, sdk.is_connected)
+
     @patch.object(apysdk.PythonSDK, '_format_event')
     def test_report(self, format_event_mock):
         # Test returns False when terminated
@@ -130,26 +140,29 @@ class TestPythonSDK(TestCase):
         event = {'test-message': 'howdy', 'type': event_type}
         sdk = self._get_python_sdk(event_type=lambda e: e['type'])
         formatted = sdk._format_event(event)
-        assert_true(isinstance(formatted, dict))  # Assert appended "\n"
+        decoded = json.loads(formatted)
+        assert_true(isinstance(formatted, basestring))  # Assert encoded JSON
         for field in ALL_WRAPPER_FIELDS:
-            assert_true(field in formatted, field)  # Are all fields in wrapper?
+            assert_true(field in decoded, field)  # Are all fields in wrapper?
         # Assert message is correctly inserted to wrapper
-        assert_equal(formatted[consts.WRAPPER_MESSAGE], event)
+        assert_equal(decoded[consts.WRAPPER_MESSAGE], event)
         # Assert event type is properly assigned - et field exists in event
-        assert_equal(event_type, formatted[consts.WRAPPER_EVENT_TYPE])
+        assert_equal(event_type, decoded[consts.WRAPPER_EVENT_TYPE])
         # Assert event type is properly assigned - et field isn't in the event
         formatted = sdk._format_event({'howdy': 'partner'})
-        assert_false(consts.WRAPPER_EVENT_TYPE in formatted)
+        decoded = json.loads(formatted)
+        assert_false(consts.WRAPPER_EVENT_TYPE in decoded)
 
         # String event
         event = 'someStringEvent'
         custom_metadata_field, custom_metadata_value = 'key', 'val'
         formatted = sdk._format_event(
             event, {custom_metadata_field: custom_metadata_value})
+        decoded = json.loads(formatted)
         # Assert message inserted properly
-        assert_equal(event, formatted[consts.WRAPPER_MESSAGE])
+        assert_equal(event, decoded[consts.WRAPPER_MESSAGE])
         # Assert custom metadata was inserted
-        assert_equal(custom_metadata_value, formatted[custom_metadata_field])
+        assert_equal(custom_metadata_value, decoded[custom_metadata_field])
 
     def tearDown(self):
         apysdk._get_sender = self.__old_get_sender
@@ -195,23 +208,24 @@ class TestSender(TestCase):
                                 notify_mock)
         event = {'rofl': 'lol'}
         event_str = apysdk._json_enc.encode(event)
-        sender._event_queue.put(event)
+        sender._event_queue.put(event_str)
         sender._exceeding_event = None
         assert_equal(event_str, sender._Sender__get_event())
 
         # Assert exceeding event is dequeued first and events aren't lost
         exceeding_event = {'lmao': 'trololol'}
-        sender._event_queue.put(event)
-        sender._exceeding_event = exceeding_event
+        sender._event_queue.put(event_str)
         exceeding_event_str = apysdk._json_enc.encode(exceeding_event)
+        sender._exceeding_event = exceeding_event_str
         assert_equal(exceeding_event_str, sender._Sender__get_event())
         assert_equal(event_str, sender._Sender__get_event())
 
         # Assert oversized event is omitted
         oversized_event = {'key': ('a' * batch_size)}
-        oversized_event_size = len(apysdk._json_enc.encode(oversized_event))
-        sender._event_queue.put(oversized_event)
-        sender._event_queue.put(event)
+        oversized_event_str = apysdk._json_enc.encode(oversized_event)
+        oversized_event_size = len(oversized_event_str)
+        sender._event_queue.put(oversized_event_str)
+        sender._event_queue.put(event_str)
 
         pulled_event = sender._Sender__get_event()
         assert_equal(event_str, pulled_event)
@@ -219,7 +233,6 @@ class TestSender(TestCase):
                      (logging.WARNING,
                       consts.LOG_MSG_OMITTED_OVERSIZED_EVENT %
                       oversized_event_size))
-
 
     @patch.object(apysdk._Sender, '_start_sender_thread')
     @patch.object(apysdk._Sender, '_verify_connection')

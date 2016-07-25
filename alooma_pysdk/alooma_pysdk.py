@@ -237,7 +237,7 @@ class PythonSDK:
         # Wrap the event with metadata
         event_wrapper[consts.WRAPPER_MESSAGE] = orig_event
 
-        return event_wrapper
+        return _json_enc.encode(event_wrapper)
 
     def report(self, event, metadata=None, block=None):
         """
@@ -534,9 +534,9 @@ class _Sender:
         if not self._http_host:
             self._choose_host()
         last_batch_time = datetime.datetime.utcnow()
-        batch = None
 
         while not (self._is_terminated.isSet() and self._event_queue.empty()):
+            batch = None
             try:
                 if not self._is_connected.isSet():
                     self._verify_connection()
@@ -608,12 +608,11 @@ class _Sender:
         """
         while True:
             if self._exceeding_event:  # An event was omitted from last batch
-                raw_event = self._exceeding_event
+                event = self._exceeding_event
                 self._exceeding_event = None
             else:  # No omitted event, get an event from the queue
-                raw_event = self._event_queue.get(block, timeout)
+                event = self._event_queue.get(block, timeout)
 
-            event = _json_enc.encode(raw_event)
             event_size = len(event)
 
             # If the event is bigger than the permitted batch size, ignore it
@@ -627,8 +626,7 @@ class _Sender:
 
     def __flush_and_close_session(self):
         queue_size_before_flush = self._event_queue.qsize()
-        while not self._event_queue.empty():
-            time.sleep(0.5)
+        self._sender_thread.join()
         self._session.close()
         self._notify(logging.INFO,
                      'Terminated the connection to %s after flushing %d '
