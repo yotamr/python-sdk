@@ -345,7 +345,6 @@ class _Sender:
 
     def __init__(self, hosts, token, buffer_size, batch_interval, batch_size,
                  use_ssl, notify):
-
         # This is a concurrent FIFO queue
         self._event_queue = Queue.Queue(buffer_size)
 
@@ -471,7 +470,6 @@ class _Sender:
         Sends a batch to the destination server via HTTP REST API
         """
         try:
-
             json_batch = '[' + ','.join(batch) + ']'  # Make JSON array string
             _logger.debug(consts.LOG_MSG_SENDING_BATCH, len(batch),
                           len(json_batch), self._rest_url)
@@ -511,8 +509,10 @@ class _Sender:
 
                 # On the rare case that the last event makes the batch too big,
                 # we store it to be emitted with the next batch
-                if curr_batch_len + event_size >= self._batch_max_size:
+                if self._is_batch_full(batch + [event],
+                                       curr_batch_len + event_size):
                     self._exceeding_event = event
+                    break
                 else:  # Event is small enough to fit in the batch
                     batch.append(event)
                     curr_batch_len += event_size
