@@ -445,7 +445,7 @@ class _Sender:
         """
         res = self._session.get(self._token_verification_url)
         if not res.ok:
-            raise exceptions.BadToken(res.content)
+            raise exceptions.BadToken(consts.LOG_MSG_BAD_TOKEN)
         return True
 
     def _start_sender_thread(self):

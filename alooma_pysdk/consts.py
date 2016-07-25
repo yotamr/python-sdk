@@ -6,8 +6,9 @@ LOG_MSG_BUFFER_FREED = 'The buffer is not full anymore, events will be ' \
 LOG_MSG_REPORT_AFTER_TERMINATION = 'Can\'t report events after termination'
 LOG_MSG_BAD_EVENT = 'Received an invalid event of type "%s", the event was ' \
                     'discarded. Original event  = "%s"'
-LOG_MSG_BAD_TOKEN = 'Token denied by remote server, please check that an input' \
-                    'exists with the supplied token'
+LOG_MSG_BAD_TOKEN = 'Token denied by remote server, please check that an ' \
+                    'input exists with the supplied token and that the ' \
+                    'supplied endpoint is correct'
 LOG_MSG_NEW_SERVER = 'Selected new server: "%s"'
 LOG_MSG_CONNECTION_FAILED = 'Failed to connect to the Alooma server: %s'
 LOG_MSG_CALLBACK_FAILURE = 'Failure in callback function call: %s'
