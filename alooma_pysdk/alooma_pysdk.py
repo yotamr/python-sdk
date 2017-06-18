@@ -1,7 +1,6 @@
 # -*- coding: utf8 -*-
 # This module contains the Alooma Python SDK, used to report events to the
 # Alooma server
-import Queue
 import datetime
 import decimal
 import inspect
@@ -14,15 +13,34 @@ import time
 import uuid
 
 try:
+    import Queue
+except ImportError:  # pragma: nocover
+    import queue as Queue
+
+try:
+    unicode = unicode
+except NameError:
+    # 'unicode' is undefined, must be Python 3
+    str = str
+    unicode = str
+    bytes = bytes
+    basestring = (str,bytes)
+else:
+    # 'unicode' exists, must be Python 2
+    str = str
+    unicode = unicode
+    bytes = str
+    basestring = basestring
+
+try:
     from OpenSSL.SSL import SysCallError
 
     broken_pipe_errors = (requests.exceptions.ConnectionError, SysCallError)
 except ImportError:
     broken_pipe_errors = (requests.exceptions.ConnectionError,)
 
-import consts
-import pysdk_exceptions as exceptions
-
+from . import consts
+from . import pysdk_exceptions as exceptions
 
 #####################################################
 # We should refrain for adding more dependencies to #
